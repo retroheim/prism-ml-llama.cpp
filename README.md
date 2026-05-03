@@ -1,47 +1,22 @@
+# llama.cpp — Prism (Q1_0/Q1_0_g128/Q2_0) + TurboQuant + TriAttention
+
 > [!IMPORTANT]
-> This is a fork of the [Prism-ML fork of llama.cpp](https://github.com/PrismML-Eng/llama.cpp) that is synced to the main llama.cpp repo
-> It is not yet ready for production use and should be considered experimental
-> 
-> The primary benefit of this fork is an up-to-date version of llama.cpp that also merges the capabiilities of the Prism-ML fork
-> to support the [Bonsai 1-bit models](https://huggingface.co/prism-ml/Bonsai-8B-gguf)
->
-> Note: this is not an official fork and is not supported by the Prism-ML team - this is just a personal fork to demo Bonsai until official support is added
+> Combined fork: [Prism-ML](https://github.com/PrismML-Eng/llama.cpp) Bonsai 1-bit support
+> + [atomicmilkshake/llama-cpp-turboquant](https://github.com/atomicmilkshake/llama-cpp-turboquant)
+> TurboQuant KV cache (turbo2/3/4) + TriAttention pruning, on top of upstream `ggml-org/llama.cpp`.
+> Experimental — not officially supported by Prism-ML or the TurboQuant authors.
 
-
-## How to use this fork
+## Bonsai 1-bit (Prism)
 
 ```bash
-# On MacOS
 git clone https://github.com/Mintplex-Labs/prism-ml-llama.cpp
 cd prism-ml-llama.cpp
 cmake -B build && cmake --build build -j
-```
 
-### You __must__ recode the public Bonsai 1-bit models to work with this fork
-```bash
-# Download the public Bonsai 1-bit models
 wget https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/main/Bonsai-8B.gguf -O Bonsai-8B.gguf
-```
 
-### Run the model
-```bash
-# Llama cli
-./build/bin/llama-cli \
-    -m Bonsai-8B.gguf \
-    -p "Explain quantum computing in simple terms." \
-    -n 256 \
-    --temp 0.5 \
-    --top-p 0.85 \
-    --top-k 20 \
-    -ngl 99
-
-# llama server
-./build/bin/llama-server \
-    -m Bonsai-8B.gguf \
-    --host 0.0.0.0 \
-    --port 8080 \
-    -ngl 99
-    --ctx-size 65536
+./build/bin/llama-cli -m Bonsai-8B.gguf -p "Hello." -n 256 --temp 0.5 --top-p 0.85 --top-k 20 -ngl 99
+./build/bin/llama-server -m Bonsai-8B.gguf --host 0.0.0.0 --port 8080 -ngl 99 --ctx-size 65536
 ```
 
 # llama.cpp
@@ -49,10 +24,143 @@ wget https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/main/Bonsai-8B.gguf 
 ![llama](https://user-images.githubusercontent.com/1991296/230134379-7181e485-c521-4d23-a0d6-f7b3b61ba524.png)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![Release](https://img.shields.io/github/v/release/ggml-org/llama.cpp)](https://github.com/ggml-org/llama.cpp/releases)
-[![Server](https://github.com/ggml-org/llama.cpp/actions/workflows/server.yml/badge.svg)](https://github.com/ggml-org/llama.cpp/actions/workflows/server.yml)
+[![GitHub](https://img.shields.io/badge/github-atomicmilkshake%2Fllama--cpp--turboquant-blue?logo=github)](https://github.com/atomicmilkshake/llama-cpp-turboquant)
+[![HuggingFace](https://img.shields.io/badge/🤗%20HuggingFace-binaries-yellow)](https://huggingface.co/atomicmilkshake/llama-cpp-turboquant-binaries)
 
-[Manifesto](https://github.com/ggml-org/llama.cpp/discussions/205) / [ggml](https://github.com/ggml-org/ggml) / [ops](https://github.com/ggml-org/llama.cpp/blob/master/docs/ops.md)
+A fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) with two major additions:
+
+- **TurboQuant** — custom low-bit quantization formats (turbo2, turbo3, turbo4) with hardware-optimised CUDA kernels for faster inference with smaller memory footprint
+- **TriAttention** — GPU-accelerated KV cache pruning ([arXiv 2604.04921](https://arxiv.org/abs/2604.04921)) that scores token importance using RoPE-inverted key vectors and evicts low-value tokens, enabling long-context inference within a fixed memory budget
+
+## Pre-built Windows Binaries
+
+Download the latest Release build (Windows x64, CUDA 13, RTX 2000+) from Hugging Face:
+
+**[🤗 atomicmilkshake/llama-cpp-turboquant-binaries](https://huggingface.co/atomicmilkshake/llama-cpp-turboquant-binaries)**
+
+> Requires CUDA 13.x runtime (`cublasLt64_13.dll`). Install the [CUDA Toolkit](https://developer.nvidia.com/cuda-downloads) or the CUDA runtime redistributable if you don't have it.
+
+---
+
+## TriAttention
+
+TriAttention keeps your KV cache within a fixed token budget by periodically scoring all cached tokens and evicting the least important ones. Scoring uses the geometric structure of RoPE-encoded key vectors — no additional model weights or fine-tuning required.
+
+### Performance (Qwen3-8B Q4\_K\_M, RTX 3080, `-c 512`)
+
+| Mode | Prune overhead | Generation speed |
+|------|---------------|-----------------|
+| No budget limit | — | 17.5 tok/s |
+| CPU scoring | ~5,900 ms/event | 17.5 tok/s |
+| **GPU scoring** | **~4–9 ms/event** | **75.0 tok/s** |
+
+GPU scoring is ~1,000× faster than CPU. The 4.3× generation speedup comes from keeping the KV cache within VRAM budget (no eviction stalls, consistent flash-attention batch sizes).
+
+### Quick start
+
+```bash
+llama-server.exe -m YourModel.gguf -c 32768 -ngl 99 --port 8080 \
+  --triattention-stats model.triattention \
+  --triattention-budget 4096 \
+  --triattention-window 256 \
+  --triattention-log
+```
+
+A `.triattention` calibration file is required. Generate one from a representative text corpus:
+
+```bash
+llama-cli.exe -m YourModel.gguf -ngl 99 \
+  --triattention-calibrate corpus.txt \
+  --triattention-calibrate-out model.triattention
+```
+
+### CLI flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--triattention-stats <file>` | *(none)* | Calibration file — **required to enable TriAttention** |
+| `--triattention-budget <n>` | `512` | Maximum KV tokens to retain after each prune |
+| `--triattention-window <n>` | `64` | Most-recent N tokens always protected from eviction |
+| `--triattention-trigger <mode>` | `slack` | When to prune: `slack` (budget+window), `interval`, `fill` |
+| `--triattention-log` | off | Print a line for each prune event |
+| `--triattention-no-protect-prefill` | off | Allow evicting prompt (prefill) tokens |
+
+### How it works
+
+1. When occupied KV cells exceed `budget + window` (SLACK mode), a prune is triggered
+2. The most recent `window` positions and all prefix/prompt tokens are protected
+3. For each sampled `(layer, head)` pair, key vectors are read from the KV cache, RoPE rotation is inverted, and a geometric offset score is computed on the GPU
+4. The top-`budget` tokens by importance score are kept; the rest are evicted
+5. Position gaps left by evicted tokens are harmless — RoPE handles non-contiguous positions natively
+
+---
+
+## TurboQuant
+
+TurboQuant provides three custom quantization formats that outperform standard GGUF quants at equivalent bit widths:
+
+| Format | Bits/weight | Notes |
+|--------|------------|-------|
+| `turbo4_0` | ~4.0 | Drop-in replacement for `q4_0`, with rotation-based clustering |
+| `turbo3_0` | ~3.0 | Sub-byte with Hadamard pre-rotation |
+| `turbo2_0` | ~2.0 | Aggressive compression with WHT-space centroids |
+
+All formats have CUDA kernels optimised for Turing+ (SM75) and Ampere (SM80/86) architectures.
+
+---
+
+## Building from source
+
+### Requirements
+
+- Windows 10/11 or Linux
+- CUDA Toolkit 12.x or 13.x
+- Visual Studio 2022+ with C++ workload (Windows) or GCC 11+ (Linux)
+- CMake 3.21+
+
+### Windows (CUDA)
+
+```powershell
+cmake -B build -G "Visual Studio 18 2022" -A x64 `
+  -DGGML_CUDA=ON `
+  -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89;120;121"
+
+cmake --build build --config Release --target llama-server -j
+```
+
+### Linux (CUDA)
+
+```bash
+cmake -B build \
+  -DGGML_CUDA=ON \
+  -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89;120;121" \
+  -DCMAKE_BUILD_TYPE=Release
+
+cmake --build build --target llama-server -j$(nproc)
+```
+
+---
+
+## Branches
+
+| Branch | Description |
+|--------|-------------|
+| `feature/triattention` | **Default** — TurboQuant + TriAttention (latest) |
+| `feature/turboquant-kv-cache` | TurboQuant base (pre-TriAttention) |
+| `master` | Upstream llama.cpp base |
+
+---
+
+## Credits
+
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) — Georgi Gerganov and contributors
+- [TurboQuant](https://github.com/TheTom/llama-cpp-turboquant) — original TurboQuant fork
+- TriAttention algorithm — [arXiv 2604.04921](https://arxiv.org/abs/2604.04921)
+- GPU integration and KV cache implementation — [@atomicmilkshake](https://github.com/atomicmilkshake)
+
+---
+
+*For the original llama.cpp documentation, see [docs/](docs/) or [github.com/ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp).*
 
 LLM inference in C/C++
 

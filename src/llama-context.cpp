@@ -5,11 +5,13 @@
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-io.h"
+#include "llama-kv-cache.h"
 #include "llama-memory.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-ext.h"
 #include "llama.h"
+#include "llama-triattention.h"
 
 #include <cinttypes>
 #include <cmath>
@@ -3019,8 +3021,16 @@ llama_context * llama_init_from_model(
 
     if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED && ggml_is_quantized(params.type_k)) {
         const uint32_t blck_size = ggml_blck_size(params.type_k);
+        const bool k_is_turbo = (params.type_k == GGML_TYPE_TURBO2_0 ||
+                                 params.type_k == GGML_TYPE_TURBO3_0 ||
+                                 params.type_k == GGML_TYPE_TURBO4_0);
         for (uint32_t il = 0; il < model->hparams.n_layer; ++il) {
-            if (model->hparams.n_embd_head_k(il) % blck_size != 0) {
+            uint32_t head_k = model->hparams.n_embd_head_k(il);
+            // Turbo types zero-pad heads to next multiple of 128 in llama-kv-cache.cpp
+            if (k_is_turbo && head_k % 128 != 0) {
+                head_k = ((head_k + 127) / 128) * 128;
+            }
+            if (head_k % blck_size != 0) {
                 LLAMA_LOG_ERROR("%s: K cache type %s with block size %u does not divide n_embd_head_k=%u\n",
                     __func__, ggml_type_name(params.type_k), blck_size, model->hparams.n_embd_head_k(il));
                 return nullptr;
@@ -3030,13 +3040,30 @@ llama_context * llama_init_from_model(
 
     if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED && ggml_is_quantized(params.type_v)) {
         const uint32_t blck_size = ggml_blck_size(params.type_v);
+        const bool v_is_turbo = (params.type_v == GGML_TYPE_TURBO2_0 ||
+                                 params.type_v == GGML_TYPE_TURBO3_0 ||
+                                 params.type_v == GGML_TYPE_TURBO4_0);
+        const bool is_mla = model->hparams.is_mla();
         for (uint32_t il = 0; il < model->hparams.n_layer; ++il) {
-            if (model->hparams.n_embd_head_v(il) % blck_size != 0) {
+            uint32_t head_v = model->hparams.n_embd_head_v(il);
+            // Turbo types zero-pad; MLA has no separate V cache (V = view of K)
+            if (v_is_turbo && !is_mla && head_v % 128 != 0) {
+                head_v = ((head_v + 127) / 128) * 128;
+            }
+            if (head_v % blck_size != 0) {
                 LLAMA_LOG_ERROR("%s: V cache type %s with block size %u does not divide n_embd_head_v=%u\n",
                     __func__, ggml_type_name(params.type_v), blck_size, model->hparams.n_embd_head_v(il));
                 return nullptr;
             }
         }
+    }
+
+    // TurboQuant cache types require flash attention — auto-enable if disabled
+    if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_DISABLED &&
+        (params.type_k == GGML_TYPE_TURBO3_0 || params.type_k == GGML_TYPE_TURBO4_0 ||
+         params.type_v == GGML_TYPE_TURBO3_0 || params.type_v == GGML_TYPE_TURBO4_0)) {
+        LLAMA_LOG_WARN("%s: turbo cache types require flash_attn — enabling automatically\n", __func__);
+        params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
     }
 
     if (ggml_is_quantized(params.type_v) && params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_DISABLED) {
@@ -3371,6 +3398,56 @@ bool llama_memory_can_shift(llama_memory_t mem) {
     }
 
     return mem->get_can_shift();
+}
+
+int32_t llama_triattention_init(
+        struct llama_context * ctx,
+                  const char * stats_path,
+                     int32_t   budget,
+                     int32_t   divide_length,
+                     int32_t   offset_max,
+                     int32_t   mode,
+                     int32_t   trigger,
+                     int32_t   agg,
+                     int32_t   seed,
+                        bool   normalize_scores,
+                        bool   protect_prefill,
+                        bool   disable_mlr,
+                        bool   disable_trig,
+                        bool   enable_logging) {
+    if (!ctx || !stats_path || stats_path[0] == '\0') {
+        return -1;
+    }
+
+    // Get the memory and try to cast to llama_kv_cache
+    auto * mem = ctx->get_memory();
+    if (!mem) {
+        LLAMA_LOG_ERROR("%s: context has no memory\n", __func__);
+        return -1;
+    }
+
+    auto * kv = dynamic_cast<llama_kv_cache *>(mem);
+    if (!kv) {
+        LLAMA_LOG_ERROR("%s: memory is not a KV cache (recurrent models not supported)\n", __func__);
+        return -1;
+    }
+
+    triattention_config cfg = {};
+    cfg.budget           = (uint32_t)budget;
+    cfg.divide_length    = (uint32_t)divide_length;
+    cfg.offset_max       = (uint32_t)offset_max;
+    cfg.mode             = (triattention_mode)mode;
+    cfg.trigger          = (triattention_trigger)trigger;
+    cfg.agg              = (triattention_agg)agg;
+    cfg.seed             = seed;
+    cfg.normalize_scores = normalize_scores;
+    cfg.protect_prefill  = protect_prefill;
+    cfg.disable_mlr      = disable_mlr;
+    cfg.disable_trig     = disable_trig;
+    cfg.enable_logging   = enable_logging;
+
+    kv->init_triattention(stats_path, &cfg);
+    return kv->has_triattention() ? 0 : -1;
 }
 
 // llama state API
