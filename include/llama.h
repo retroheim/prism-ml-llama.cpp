@@ -154,9 +154,9 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_TQ2_0         = 37, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_MXFP4_MOE     = 38, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_NVFP4         = 39, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_Q1_0_g128     = 40, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_Q1_0          = 41, // except 1d tensors
-        LLAMA_FTYPE_MOSTLY_Q2_0          = 42, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q1_0_g128     = 40, // except 1d tensors (= PrismML Q1_0 file_type on disk)
+        LLAMA_FTYPE_MOSTLY_Q2_0          = 41, // except 1d tensors — DO NOT MOVE (GGUF ABI)
+        LLAMA_FTYPE_MOSTLY_Q1_0          = 42, // except 1d tensors (local 32-block, moved from 41)
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };

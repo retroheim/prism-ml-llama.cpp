@@ -428,9 +428,9 @@ extern "C" {
         // GGML_TYPE_IQ4_NL_8_8 = 38,
         GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
-        GGML_TYPE_Q1_0_g128 = 41,
-        GGML_TYPE_Q1_0      = 42,
-        GGML_TYPE_Q2_0      = 43,
+        GGML_TYPE_Q1_0_g128 = 41, // PrismML 128-block 1-bit (= upstream Q1_0 on disk)
+        GGML_TYPE_Q2_0      = 42, // PrismML 128-block 2-bit — DO NOT MOVE (GGUF ABI)
+        GGML_TYPE_Q1_0      = 43, // local 32-block 1-bit (moved up from 42 to free Q2_0)
         GGML_TYPE_TURBO3_0  = 44, // TurboQuant 3-bit KV cache: 2-bit PolarQuant + 1-bit QJL
         GGML_TYPE_TURBO4_0  = 45, // TurboQuant 4-bit KV cache: 3-bit PolarQuant + 1-bit QJL
         GGML_TYPE_TURBO2_0  = 46, // TurboQuant 2-bit KV cache: 2-bit PolarQuant (no QJL)
@@ -472,8 +472,8 @@ extern "C" {
         GGML_FTYPE_MOSTLY_MXFP4   = 25, // except 1d tensors
         GGML_FTYPE_MOSTLY_NVFP4   = 26, // except 1d tensors
         GGML_FTYPE_MOSTLY_Q1_0_g128 = 27, // except 1d tensors
-        GGML_FTYPE_MOSTLY_Q1_0    = 28, // except 1d tensors
-        GGML_FTYPE_MOSTLY_Q2_0    = 29, // except 1d tensors
+        GGML_FTYPE_MOSTLY_Q2_0    = 28, // except 1d tensors — DO NOT MOVE
+        GGML_FTYPE_MOSTLY_Q1_0    = 29, // except 1d tensors (moved up from 28)
     };
 
     // available tensor operations:

@@ -4024,9 +4024,9 @@ class GGMLQuantizationType(IntEnum):
     TQ2_0   = 35
     MXFP4   = 39
     NVFP4   = 40
-    Q1_0_g128 = 41
-    Q1_0      = 42
-    Q2_0      = 43
+    Q1_0_g128 = 41  # = PrismML Q1_0 (128-block 1-bit) on disk
+    Q2_0      = 42  # PrismML 2-bit — DO NOT MOVE (GGUF ABI)
+    Q1_0      = 43  # local 32-block 1-bit (moved from 42)
 
 
 class ExpertGatingFuncType(IntEnum):
@@ -4080,9 +4080,9 @@ class LlamaFileType(IntEnum):
     MOSTLY_TQ2_0         = 37  # except 1d tensors
     MOSTLY_MXFP4_MOE     = 38  # except 1d tensors
     MOSTLY_NVFP4         = 39  # except 1d tensors
-    MOSTLY_Q1_0_g128     = 40  # except 1d tensors
-    MOSTLY_Q1_0          = 41  # except 1d tensors
-    MOSTLY_Q2_0          = 42  # except 1d tensors
+    MOSTLY_Q1_0_g128     = 40  # except 1d tensors (= PrismML MOSTLY_Q1_0 file_type)
+    MOSTLY_Q2_0          = 41  # except 1d tensors — DO NOT MOVE (GGUF ABI)
+    MOSTLY_Q1_0          = 42  # except 1d tensors (local 32-block, moved from 41)
 
     GUESSED              = 1024  # not specified in the model file
 
