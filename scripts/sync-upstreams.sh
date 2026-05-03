@@ -2,7 +2,7 @@
 # Sync the prism-ml-llama.cpp fork with its three upstream sources:
 #   ggml       — github.com/ggml-org/llama.cpp           (master)
 #   prismml    — github.com/PrismML-Eng/llama.cpp        (prism)
-#   turboquant — github.com/atomicmilkshake/llama-cpp-turboquant (feature/triattention)
+#   turboquant — github.com/TheTom/llama-cpp-turboquant  (feature/turboquant-kv-cache)
 #
 # Usage:
 #   scripts/sync-upstreams.sh           # fetch + show divergence (no merges)
@@ -23,7 +23,7 @@ cd "$REPO_ROOT"
 UPSTREAMS=(
     "ggml|https://github.com/ggml-org/llama.cpp.git|master"
     "prismml|https://github.com/PrismML-Eng/llama.cpp.git|prism"
-    "turboquant|https://github.com/atomicmilkshake/llama-cpp-turboquant.git|feature/triattention"
+    "turboquant|https://github.com/TheTom/llama-cpp-turboquant.git|feature/turboquant-kv-cache"
 )
 
 color_reset="$(printf '\033[0m')"

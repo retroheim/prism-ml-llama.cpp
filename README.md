@@ -7,7 +7,8 @@
 |-------------|-----------------------------------------------------------------------------------------------------|-------------------------------------------------------|
 | base        | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) (`master`)                              | upstream llama.cpp                                    |
 | weights     | [PrismML-Eng/llama.cpp](https://github.com/PrismML-Eng/llama.cpp) (`prism`)                         | Bonsai 1-bit (Q1_0/Q1_0_g128) + 2-bit (Q2_0)          |
-| KV cache    | [atomicmilkshake/llama-cpp-turboquant](https://github.com/atomicmilkshake/llama-cpp-turboquant) (`feature/triattention`) | TurboQuant (TURBO2/3/4) + TriAttention pruning |
+| TurboQuant  | [TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant) (`feature/turboquant-kv-cache`) | TURBO2/3/4 KV cache + TQ3_1S/TQ4_1S weight quants (WHT-rotated) |
+| TriAttention| [atomicmilkshake/llama-cpp-turboquant](https://github.com/atomicmilkshake/llama-cpp-turboquant) (legacy import)  | KV cache eviction (`--triattention-*` args) |
 | performance | this fork                                                                                           | AVX2/NEON SIMD for Q1_0/Q1_0_g128/Q2_0 dot products   |
 
 ## What you get
@@ -53,14 +54,16 @@ wget https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/main/Bonsai-8B.gguf 
 The on-disk GGUF format encodes these IDs. Existing `prism-ml/Ternary-Bonsai-*.gguf`
 files depend on them.
 
-| Type                | `GGML_TYPE_*` | `LLAMA_FTYPE_MOSTLY_*` |
-|---------------------|---------------|------------------------|
-| Q1_0_g128 (1.125bpw)| 41            | 40                     |
-| Q2_0 (2.125 bpw)    | 42            | 41                     |
-| Q1_0 (~1.5 bpw, 32-block) | 43      | 42                     |
-| TURBO3_0 (KV cache) | 44            | 43                     |
-| TURBO4_0 (KV cache) | 45            | 44                     |
-| TURBO2_0 (KV cache) | 46            | 45                     |
+| Type                       | `GGML_TYPE_*` | `LLAMA_FTYPE_MOSTLY_*` |
+|----------------------------|---------------|------------------------|
+| Q1_0_g128 (1.125 bpw)      | 41            | 40                     |
+| Q2_0 (2.125 bpw)           | 42            | 41                     |
+| Q1_0 (~1.5 bpw, 32-block)  | 43            | 42                     |
+| TURBO3_0 (KV cache, TheTom)| 44            | —                      |
+| TURBO4_0 (KV cache, TheTom)| 45            | —                      |
+| TURBO2_0 (KV cache, TheTom)| 46            | —                      |
+| TQ3_1S (3-bit weight, TheTom)| 47          | 43                     |
+| TQ4_1S (4-bit weight, TheTom)| 48          | 44                     |
 
 Q1_0_g128 = PrismML's `Q1_0` on disk (semantically identical 128-block 1-bit format).
 
