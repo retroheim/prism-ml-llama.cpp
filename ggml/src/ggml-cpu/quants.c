@@ -146,26 +146,26 @@ void ggml_vec_dot_q1_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     float sumf = 0.0;
     
     for (int i = 0; i < nb; i++) {
-        const float d0 = GGML_FP16_TO_FP32(x[i].d);
-        const float d1 = GGML_FP16_TO_FP32(y[i].d);
-        
+        const float d0 = GGML_CPU_FP16_TO_FP32(x[i].d);
+        const float d1 = GGML_CPU_FP16_TO_FP32(y[i].d);
+
         int sumi = 0;
-        
+
         for (int j = 0; j < QK1_0; j++) {
             const int bit_index = j;
             const int byte_index = bit_index / 8;
             const int bit_offset = bit_index % 8;
-            
+
             // Extract bit: 1 = +1, 0 = -1
             const int xi = ((x[i].qs[byte_index] >> bit_offset) & 1) ? 1 : -1;
             const int yi = y[i].qs[j];
-            
+
             sumi += xi * yi;
         }
-        
+
         sumf += d0 * d1 * sumi;
     }
-    
+
     *s = sumf;
 }
 
@@ -189,22 +189,28 @@ void ggml_vec_dot_q1_0_g128_q8_0_generic(int n, float * GGML_RESTRICT s, size_t 
     // Each Q1_0_g128 block has 128 elements, each Q8_0 block has 32 elements
     // So we need 4 Q8_0 blocks per Q1_0_g128 block
     for (int i = 0; i < nb; i++) {
-        const float d0 = GGML_FP16_TO_FP32(x[i].d);
-        
+        const float d0 = GGML_CPU_FP16_TO_FP32(x[i].d);
+
         float sumi = 0.0f;
 
         for (int k = 0; k < 4; k++) {
-            const float d1 = GGML_FP16_TO_FP32(y[i*4 + k].d);
-
+            const block_q8_0 * GGML_RESTRICT yb = &y[i * 4 + k];
+            const float d1 = GGML_CPU_FP16_TO_FP32(yb->d);
             int sumi_block = 0;
 
-            for (int j = 0; j < QK8_0; j++) {
-                const int bit_index = k * QK8_0 + j;
-                const int byte_index = bit_index / 8;
-                const int bit_offset = bit_index % 8;
+            const uint8_t * GGML_RESTRICT bits = &x[i].qs[k * 4];
+            const int8_t  * GGML_RESTRICT qy   = yb->qs;
 
-                const int xi = ((x[i].qs[byte_index] >> bit_offset) & 1) ? 1 : -1;
-                sumi_block += xi * y[i*4 + k].qs[j];
+            for (int b = 0; b < 4; ++b, qy += 8) {
+                const unsigned mask = bits[b];
+                sumi_block += ((mask & 0x01) ? qy[0] : -qy[0])
+                           +  ((mask & 0x02) ? qy[1] : -qy[1])
+                           +  ((mask & 0x04) ? qy[2] : -qy[2])
+                           +  ((mask & 0x08) ? qy[3] : -qy[3])
+                           +  ((mask & 0x10) ? qy[4] : -qy[4])
+                           +  ((mask & 0x20) ? qy[5] : -qy[5])
+                           +  ((mask & 0x40) ? qy[6] : -qy[6])
+                           +  ((mask & 0x80) ? qy[7] : -qy[7]);
             }
 
             sumi += d1 * sumi_block;
