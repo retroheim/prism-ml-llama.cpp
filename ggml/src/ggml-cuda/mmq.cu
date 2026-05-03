@@ -283,7 +283,6 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
         // TODO: Q1_0 and Q1_0_g128 MMQ implementation exists but is currently disabled due to accuracy issues
         case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q1_0_g128:
-        case GGML_TYPE_Q1_0:
         case GGML_TYPE_Q2_0:
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
