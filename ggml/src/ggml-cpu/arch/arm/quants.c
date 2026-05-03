@@ -215,20 +215,7 @@ void ggml_vec_dot_q1_0_g128_q8_0(int n, float * GGML_RESTRICT s, size_t bs, cons
     const block_q1_0_g128 * GGML_RESTRICT x = vx;
     const block_q8_0 * GGML_RESTRICT y = vy;
 
-    float sumf = 0.0f;
-
 #if defined(__ARM_NEON)
-    // Process one Q1_0_g128 block at a time
-    // Each block has 128 1-bit values and needs 4 Q8_0 blocks (4 * 32 = 128)
-    //
-    // Strategy: For 1-bit quants, bit=1 means +1, bit=0 means -1
-    // dot_product = sum(xi * yi) where xi is +1 or -1
-    //             = sum_where_bit_1(yi) - sum_where_bit_0(yi)
-    //             = 2 * sum_where_bit_1(yi) - sum_all(yi)
-    //
-    // We use the lookup table approach: expand each byte of bits to 8 bytes
-    // where each byte is either 0x00 (bit=0) or 0x10 (bit=1), then use as mask
-
     float32x4_t sumv = vdupq_n_f32(0.0f);
 
     for (int i = 0; i < nb; i++) {
@@ -292,7 +279,7 @@ void ggml_vec_dot_q1_0_g128_q8_0(int n, float * GGML_RESTRICT s, size_t bs, cons
     UNUSED(nb);
     UNUSED(x);
     UNUSED(y);
-    ggml_vec_dot_q1_0_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+    ggml_vec_dot_q1_0_g128_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
 }
 
