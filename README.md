@@ -1,23 +1,89 @@
-# llama.cpp — Prism (Q1_0/Q1_0_g128/Q2_0) + TurboQuant + TriAttention
+# llama.cpp — Prism + TurboQuant + ggml-org
 
 > [!IMPORTANT]
-> Combined fork: [Prism-ML](https://github.com/PrismML-Eng/llama.cpp) Bonsai 1-bit support
-> + [atomicmilkshake/llama-cpp-turboquant](https://github.com/atomicmilkshake/llama-cpp-turboquant)
-> TurboQuant KV cache (turbo2/3/4) + TriAttention pruning, on top of upstream `ggml-org/llama.cpp`.
-> Experimental — not officially supported by Prism-ML or the TurboQuant authors.
+> Combined fork tracking three upstreams. Not officially supported by any of them.
 
-## Bonsai 1-bit (Prism)
+| Layer       | Source                                                                                              | What it adds                                          |
+|-------------|-----------------------------------------------------------------------------------------------------|-------------------------------------------------------|
+| base        | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) (`master`)                              | upstream llama.cpp                                    |
+| weights     | [PrismML-Eng/llama.cpp](https://github.com/PrismML-Eng/llama.cpp) (`prism`)                         | Bonsai 1-bit (Q1_0/Q1_0_g128) + 2-bit (Q2_0)          |
+| KV cache    | [atomicmilkshake/llama-cpp-turboquant](https://github.com/atomicmilkshake/llama-cpp-turboquant) (`feature/triattention`) | TurboQuant (TURBO2/3/4) + TriAttention pruning |
+| performance | this fork                                                                                           | AVX2/NEON SIMD for Q1_0/Q1_0_g128/Q2_0 dot products   |
+
+## What you get
+
+- **1.125 bpw weights** via Q1_0_g128 (Bonsai) — ~7× smaller than fp16
+- **3-bit KV cache** via TURBO3_0 (TurboQuant: PolarQuant + 1-bit QJL) — ~5× compression
+- **Longer context per VRAM** via TriAttention KV pruning
+- **AVX2 dot product** for all 1-bit/2-bit weight types on x86, NEON on ARM
+
+## Quick start (CPU / CUDA / nix)
 
 ```bash
-git clone https://github.com/Mintplex-Labs/prism-ml-llama.cpp
-cd prism-ml-llama.cpp
-cmake -B build && cmake --build build -j
+# CPU build
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON
+cmake --build build -j
 
+# CUDA build (requires nvcc)
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON
+cmake --build build -j
+
+# Nix flake
+nix build .#default      # CPU + BLAS
+nix build .#cuda         # CUDA backend (pulls cudaPackages)
+nix build .#vulkan       # Vulkan backend
+nix profile install .#cuda
+```
+
+## Run Bonsai
+
+```bash
 wget https://huggingface.co/prism-ml/Bonsai-8B-gguf/resolve/main/Bonsai-8B.gguf -O Bonsai-8B.gguf
 
-./build/bin/llama-cli -m Bonsai-8B.gguf -p "Hello." -n 256 --temp 0.5 --top-p 0.85 --top-k 20 -ngl 99
-./build/bin/llama-server -m Bonsai-8B.gguf --host 0.0.0.0 --port 8080 -ngl 99 --ctx-size 65536
+# Plain inference
+./build/bin/llama-cli -m Bonsai-8B.gguf -p "Hello." -n 256 -ngl 99
+
+# Server with TurboQuant 3-bit KV cache + 256K context
+./build/bin/llama-server -m Bonsai-8B.gguf -ngl 99 --port 8080 \
+    --ctx-size 262144 -ctk turbo3 -ctv turbo3
 ```
+
+## Quant type IDs (load-bearing — do not renumber)
+
+The on-disk GGUF format encodes these IDs. Existing `prism-ml/Ternary-Bonsai-*.gguf`
+files depend on them.
+
+| Type                | `GGML_TYPE_*` | `LLAMA_FTYPE_MOSTLY_*` |
+|---------------------|---------------|------------------------|
+| Q1_0_g128 (1.125bpw)| 41            | 40                     |
+| Q2_0 (2.125 bpw)    | 42            | 41                     |
+| Q1_0 (~1.5 bpw, 32-block) | 43      | 42                     |
+| TURBO3_0 (KV cache) | 44            | 43                     |
+| TURBO4_0 (KV cache) | 45            | 44                     |
+| TURBO2_0 (KV cache) | 46            | 45                     |
+
+Q1_0_g128 = PrismML's `Q1_0` on disk (semantically identical 128-block 1-bit format).
+
+## Syncing with upstreams
+
+```bash
+scripts/sync-upstreams.sh status      # fetch + show divergence (read-only)
+scripts/sync-upstreams.sh fetch       # just fetch
+scripts/sync-upstreams.sh merge       # interactive — prompts before each merge
+scripts/sync-upstreams.sh merge --yes # auto-merge all (stops on conflict)
+```
+
+The script manages remotes (`ggml`, `prismml`, `turboquant`), fetches their
+tracked refs (`master`, `prism`, `feature/triattention`), and reports
+behind/ahead counts. On conflict it stops and lists the unmerged files;
+resolve, `git add`, `git commit`, and re-run `status` to verify.
+
+## Caveats
+
+- **ABI**: don't move `Q2_0=42` or `LLAMA_FTYPE_MOSTLY_Q2_0=41` — every shipping Bonsai Q2_0 GGUF depends on those IDs.
+- **TurboQuant on CUDA**: KV cache types require the `cuda` build (`triattention_gpu_*` symbols are CUDA-only; CPU build ships weak stubs that do nothing).
+- **Q1_0 (32-block)** is local-only and was renumbered from 42 → 43 during the ABI fix. GGUFs created before that renumber need re-quantization.
+- **Q2_0 MMQ**: enabled with the trait specialization in `ggml-cuda/mmq.cuh`. Q1_0/Q1_0_g128 MMQ disabled per a known accuracy issue (vec_dot path used instead).
 
 # llama.cpp
 
