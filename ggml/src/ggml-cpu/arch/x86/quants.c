@@ -553,7 +553,47 @@ static inline __m128i get_scale_shuffle(int i) {
 #endif
 
 void ggml_vec_dot_q1_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    const int qk = QK1_0;
+    const int nb = n / qk;
+
+    assert(n % qk == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q1_0 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+#if defined(__AVX2__)
+    const __m256i ones_8  = _mm256_set1_epi8(1);
+    const __m256i ones_16 = _mm256_set1_epi16(1);
+    const __m256i byte_shuf = _mm256_setr_epi8(
+            0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
+            2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3);
+    const __m256i bit_masks = _mm256_setr_epi8(
+            1, 2, 4, 8, 16, 32, 64, (char) -128, 1, 2, 4, 8, 16, 32, 64, (char) -128,
+            1, 2, 4, 8, 16, 32, 64, (char) -128, 1, 2, 4, 8, 16, 32, 64, (char) -128);
+    const __m256i zero = _mm256_setzero_si256();
+    __m256 acc = _mm256_setzero_ps();
+
+    for (int ib = 0; ib < nb; ++ib) {
+        const float d = GGML_CPU_FP16_TO_FP32(x[ib].d) * GGML_CPU_FP16_TO_FP32(y[ib].d);
+        const uint32_t qs32 = *(const uint32_t *) x[ib].qs;
+
+        const __m256i qy = _mm256_loadu_si256((const __m256i *) y[ib].qs);
+        const __m256i sm = _mm256_cmpeq_epi8(
+                _mm256_and_si256(_mm256_shuffle_epi8(_mm256_set1_epi32((int) qs32), byte_shuf), bit_masks), zero);
+        const __m256i sy = _mm256_sub_epi8(_mm256_xor_si256(qy, sm), sm);
+        const __m256i s32 = _mm256_madd_epi16(_mm256_maddubs_epi16(ones_8, sy), ones_16);
+        acc = _mm256_fmadd_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(s32), acc);
+    }
+
+    *s = hsum_float_8(acc);
+#else
     ggml_vec_dot_q1_0_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
 }
 
 void ggml_vec_dot_q1_0_g128_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
@@ -699,6 +739,89 @@ void ggml_vec_dot_q1_0_g128_q8_0(int n, float * GGML_RESTRICT s, size_t bs, cons
     UNUSED(x);
     UNUSED(y);
     ggml_vec_dot_q1_0_g128_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+#endif
+}
+
+// Q2_0: 128-element block, 2 bits/element packed in 32 bytes.
+// Each chunk of 8 bytes (qs[k*8..k*8+8]) maps to 32 codes c in {0,1,2,3} = symbol s = c-1 in {-1,0,1,2}.
+// Math trick: dot = sum(s*y) = sum(c*y) - sum(y), keeps codes unsigned for maddubs.
+void ggml_vec_dot_q2_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    const int qk = QK2_0;  // 128
+    const int nb = n / qk;
+
+    assert(n % qk == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q2_0 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+#if defined(__AVX2__)
+    const __m256i ones_8  = _mm256_set1_epi8(1);
+    const __m256i ones_16 = _mm256_set1_epi16(1);
+    const __m256i mask_3  = _mm256_set1_epi8(3);
+    // Replicate 8 input bytes to 32 lanes: each input byte appears 4 times consecutively.
+    // Low 16 bytes: bytes 0..3 each repeated 4 times. High 16 bytes: bytes 4..7 each repeated 4 times.
+    const __m128i shuf_lo = _mm_setr_epi8(0,0,0,0, 1,1,1,1, 2,2,2,2, 3,3,3,3);
+    const __m128i shuf_hi = _mm_setr_epi8(4,4,4,4, 5,5,5,5, 6,6,6,6, 7,7,7,7);
+    // Blend selectors: mod-4 lane position picks shift amount (0,2,4,6).
+    const __m256i sel_lane1 = _mm256_setr_epi8(
+            0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0,
+            0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0);
+    const __m256i sel_lane2 = _mm256_setr_epi8(
+            0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0,
+            0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0);
+    const __m256i sel_lane3 = _mm256_setr_epi8(
+            0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1,
+            0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1, 0, 0, 0, -1);
+
+    __m256 acc = _mm256_setzero_ps();
+
+    for (int ib = 0; ib < nb; ++ib) {
+        const float d0 = GGML_CPU_FP16_TO_FP32(x[ib].d);
+
+        for (int k = 0; k < 4; ++k) {
+            // Load 8 bytes of packed 2-bit codes for this chunk
+            const __m128i raw = _mm_loadl_epi64((const __m128i *) &x[ib].qs[k * 8]);
+            // Replicate bytes: low half holds bytes 0..3 (each 4x), high half holds bytes 4..7 (each 4x)
+            const __m128i bytes_lo = _mm_shuffle_epi8(raw, shuf_lo);
+            const __m128i bytes_hi = _mm_shuffle_epi8(raw, shuf_hi);
+            const __m256i bytes = _mm256_set_m128i(bytes_hi, bytes_lo);
+
+            // Pre-compute all 4 shift+mask versions
+            const __m256i v0 = _mm256_and_si256(bytes, mask_3);
+            const __m256i v2 = _mm256_and_si256(_mm256_srli_epi16(bytes, 2), mask_3);
+            const __m256i v4 = _mm256_and_si256(_mm256_srli_epi16(bytes, 4), mask_3);
+            const __m256i v6 = _mm256_and_si256(_mm256_srli_epi16(bytes, 6), mask_3);
+
+            // Blend by lane position mod 4: lane 0 → v0, 1 → v2, 2 → v4, 3 → v6
+            __m256i codes = _mm256_blendv_epi8(v0, v2, sel_lane1);
+            codes = _mm256_blendv_epi8(codes, v4, sel_lane2);
+            codes = _mm256_blendv_epi8(codes, v6, sel_lane3);
+            // codes now holds 32 unsigned codes ∈ {0,1,2,3}
+
+            // Load Q8_0 chunk
+            const block_q8_0 * GGML_RESTRICT yb = &y[ib * 4 + k];
+            const float d1 = GGML_CPU_FP16_TO_FP32(yb->d);
+            const __m256i qy = _mm256_loadu_si256((const __m256i *) yb->qs);
+
+            // dot(symbol, y) = dot(code, y) - dot(1, y)
+            // maddubs(uint8 a, int8 b) = sat16(a[2i]*b[2i] + a[2i+1]*b[2i+1])
+            const __m256i cy_16  = _mm256_maddubs_epi16(codes, qy);   // sum(c[2i]*y[2i] + c[2i+1]*y[2i+1])
+            const __m256i sumy_16 = _mm256_maddubs_epi16(ones_8, qy); // sum(y[2i] + y[2i+1])
+            const __m256i diff_16 = _mm256_sub_epi16(cy_16, sumy_16);
+            const __m256i s32 = _mm256_madd_epi16(diff_16, ones_16);  // reduce to int32 lanes
+
+            acc = _mm256_fmadd_ps(_mm256_set1_ps(d0 * d1), _mm256_cvtepi32_ps(s32), acc);
+        }
+    }
+
+    *s = hsum_float_8(acc);
+#else
+    ggml_vec_dot_q2_0_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
 #endif
 }
 
