@@ -176,10 +176,10 @@ static void turbo_innerq_init(void) {
     // Zero accumulators and set calibrating flag on device
     float zeros[INNERQ_MAX_CHANNELS] = {0};
     int zero = 0, one = 1;
-    cudaMemcpyToSymbol(d_innerq_sq_accum, zeros, sizeof(zeros));
-    cudaMemcpyToSymbol(d_innerq_count, &zero, sizeof(int));
-    cudaMemcpyToSymbol(d_innerq_active, &zero, sizeof(int));
-    cudaMemcpyToSymbol(d_innerq_calibrating, &one, sizeof(int));
+    CUDA_CHECK(cudaMemcpyToSymbol(d_innerq_sq_accum, zeros, sizeof(zeros)));
+    CUDA_CHECK(cudaMemcpyToSymbol(d_innerq_count, &zero, sizeof(int)));
+    CUDA_CHECK(cudaMemcpyToSymbol(d_innerq_active, &zero, sizeof(int)));
+    CUDA_CHECK(cudaMemcpyToSymbol(d_innerq_calibrating, &one, sizeof(int)));
 
     GGML_LOG_INFO("%s: InnerQ calibration started (target=%d tokens, strength=%.2f)\n",
                    __func__, innerq_target_tokens, innerq_strength);
@@ -190,14 +190,14 @@ static void turbo_innerq_finalize(int group_size) {
     // Read accumulators from device
     float sq_accum[INNERQ_MAX_CHANNELS];
     int count = 0;
-    cudaMemcpyFromSymbol(sq_accum, d_innerq_sq_accum, group_size * sizeof(float));
-    cudaMemcpyFromSymbol(&count, d_innerq_count, sizeof(int));
+    CUDA_CHECK(cudaMemcpyFromSymbol(sq_accum, d_innerq_sq_accum, group_size * sizeof(float)));
+    CUDA_CHECK(cudaMemcpyFromSymbol(&count, d_innerq_count, sizeof(int)));
 
     if (count <= 0) {
         GGML_LOG_WARN("%s: InnerQ calibration got 0 tokens, disabling\n", __func__);
         innerq_enabled = 0;
         int zero = 0;
-        cudaMemcpyToSymbol(d_innerq_calibrating, &zero, sizeof(int));
+        CUDA_CHECK(cudaMemcpyToSymbol(d_innerq_calibrating, &zero, sizeof(int)));
         return;
     }
 
@@ -231,17 +231,17 @@ static void turbo_innerq_finalize(int group_size) {
                        __func__, max_ratio);
         innerq_enabled = 0;
         int zero = 0;
-        cudaMemcpyToSymbol(d_innerq_calibrating, &zero, sizeof(int));
+        CUDA_CHECK(cudaMemcpyToSymbol(d_innerq_calibrating, &zero, sizeof(int)));
         return;
     }
 
     // Stop calibrating, upload scales, activate
     int zero = 0, one = 1;
-    cudaMemcpyToSymbol(d_innerq_calibrating, &zero, sizeof(int));
-    cudaMemcpyToSymbol(d_innerq_scale, scale, group_size * sizeof(float));
-    cudaMemcpyToSymbol(d_innerq_scale_inv, scale_inv, group_size * sizeof(float));
-    cudaDeviceSynchronize();  // ensure scales are visible before activating
-    cudaMemcpyToSymbol(d_innerq_active, &one, sizeof(int));
+    CUDA_CHECK(cudaMemcpyToSymbol(d_innerq_calibrating, &zero, sizeof(int)));
+    CUDA_CHECK(cudaMemcpyToSymbol(d_innerq_scale, scale, group_size * sizeof(float)));
+    CUDA_CHECK(cudaMemcpyToSymbol(d_innerq_scale_inv, scale_inv, group_size * sizeof(float)));
+    CUDA_CHECK(cudaDeviceSynchronize());  // ensure scales are visible before activating
+    CUDA_CHECK(cudaMemcpyToSymbol(d_innerq_active, &one, sizeof(int)));
 
     innerq_enabled = 2;  // active
 
@@ -272,7 +272,7 @@ static void turbo_innerq_check_finalize(int group_size, int64_t ne00) {
                            __func__, (long long)ne00, group_size);
             innerq_enabled = 0;
             int zero = 0;
-            cudaMemcpyToSymbol(d_innerq_calibrating, &zero, sizeof(int));
+            CUDA_CHECK(cudaMemcpyToSymbol(d_innerq_calibrating, &zero, sizeof(int)));
         }
         return;
     }
@@ -280,7 +280,7 @@ static void turbo_innerq_check_finalize(int group_size, int64_t ne00) {
     // Check if calibration is complete
     if (innerq_enabled == 1) {
         int count = 0;
-        cudaMemcpyFromSymbol(&count, d_innerq_count, sizeof(int));
+        CUDA_CHECK(cudaMemcpyFromSymbol(&count, d_innerq_count, sizeof(int)));
         if (count >= innerq_target_tokens) {
             turbo_innerq_finalize(group_size);
         }
@@ -419,3 +419,35 @@ static __device__ __forceinline__ float turbo2_dequant_element(
     uint8_t idx = (x->qs[j / 4] >> ((j % 4) * 2)) & 0x3;
     return TURBO_CENTROIDS_2BIT[idx] * norm;
 }
+
+// ============================================================================
+// Weight compression types (TQ3_1S, TQ4_1S)
+// These use N(0,1) centroids (NOT N(0,1/128) like KV cache types)
+// and require inverse WHT (RHT) after centroid lookup.
+// ============================================================================
+
+#define QR_TQ4_1S 1  // dequantize produces 2 consecutive elements
+#define QR_TQ3_1S 1
+
+// ---- Weight centroids: Lloyd-Max for N(0,1) ----
+
+static __constant__ float TQ4_CENTROIDS_WEIGHT[16] = {
+    -2.732590f, -2.069017f, -1.618046f, -1.256231f,
+    -0.942340f, -0.656759f, -0.388048f, -0.128395f,
+     0.128395f,  0.388048f,  0.656759f,  0.942340f,
+     1.256231f,  1.618046f,  2.069017f,  2.732590f
+};
+
+static __constant__ float TQ3_CENTROIDS_WEIGHT[8] = {
+    -1.996684f, -1.291398f, -0.740341f, -0.247508f,
+     0.230106f,  0.725222f,  1.277503f,  1.988943f
+};
+
+// ---- Sign array for weight WHT (golden ratio hash, 32 elements) ----
+
+static __constant__ float TQ_WEIGHT_SIGNS[32] = {
+    +1.0f, -1.0f, +1.0f, -1.0f, +1.0f, +1.0f, -1.0f, +1.0f,
+    -1.0f, -1.0f, +1.0f, -1.0f, +1.0f, +1.0f, -1.0f, +1.0f,
+    -1.0f, -1.0f, +1.0f, -1.0f, +1.0f, -1.0f, -1.0f, +1.0f,
+    -1.0f, +1.0f, +1.0f, -1.0f, +1.0f, -1.0f, -1.0f, +1.0f
+};

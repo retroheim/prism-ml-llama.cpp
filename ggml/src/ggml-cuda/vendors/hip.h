@@ -51,6 +51,11 @@
 #define __SHFL_XOR_GET(_1, _2, _3, _4, NAME, ...) NAME
 #define __shfl_xor_sync(...) __SHFL_XOR_GET(__VA_ARGS__, __SHFL_XOR_SYNC_4, __SHFL_XOR_SYNC_3)(__VA_ARGS__)
 
+// __shfl_xor_sync: support 3-arg and 4-arg calls (HIP ignores mask)
+#define __SHFL_XOR_SYNC_3(mask, var, laneMask)        __shfl_xor(var, laneMask, warpSize)
+#define __SHFL_XOR_SYNC_4(mask, var, laneMask, width) __shfl_xor(var, laneMask, width)
+#define __SHFL_XOR_GET(_1, _2, _3, _4, NAME, ...) NAME
+#define __shfl_xor_sync(...) __SHFL_XOR_GET(__VA_ARGS__, __SHFL_XOR_SYNC_4, __SHFL_XOR_SYNC_3)(__VA_ARGS__)
 // __shfl_down_sync: support 3-arg and 4-arg calls (HIP ignores mask)
 #define __SHFL_DOWN_SYNC_3(mask, var, delta)        __shfl_down(var, delta, warpSize)
 #define __SHFL_DOWN_SYNC_4(mask, var, delta, width) __shfl_down(var, delta, width)
@@ -157,6 +162,9 @@
 #define cudaGraphNodeTypeKernel hipGraphNodeTypeKernel
 #define cudaGraphInstantiate hipGraphInstantiate
 #define cudaStreamEndCapture hipStreamEndCapture
+#define cudaStreamCaptureStatus hipStreamCaptureStatus
+#define cudaStreamIsCapturing hipStreamIsCapturing
+#define cudaStreamCaptureStatusNone hipStreamCaptureStatusNone
 #define cudaGraphDestroy hipGraphDestroy
 #define cudaGraphKernelNodeSetParams hipGraphKernelNodeSetParams
 #define cudaErrorInvalidDeviceFunction hipErrorInvalidDeviceFunction

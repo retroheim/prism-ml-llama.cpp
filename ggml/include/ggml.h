@@ -181,7 +181,7 @@
 #            define GGML_API __declspec(dllimport) extern
 #        endif
 #    else
-#        define GGML_API __attribute__ ((visibility ("default"))) extern
+#        define GGML_API __attribute__ ((visibility ("default")))
 #    endif
 #else
 #    define GGML_API extern
@@ -428,13 +428,15 @@ extern "C" {
         // GGML_TYPE_IQ4_NL_8_8 = 38,
         GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
-        GGML_TYPE_Q1_0_g128 = 41, // PrismML 128-block 1-bit (= upstream Q1_0 on disk)
+        GGML_TYPE_Q1_0_g128 = 41, // PrismML 128-block 1-bit (= upstream / TheTom Q1_0 on disk)
         GGML_TYPE_Q2_0      = 42, // PrismML 128-block 2-bit — DO NOT MOVE (GGUF ABI)
-        GGML_TYPE_Q1_0      = 43, // local 32-block 1-bit (moved up from 42 to free Q2_0)
-        GGML_TYPE_TURBO3_0  = 44, // TurboQuant 3-bit KV cache: 2-bit PolarQuant + 1-bit QJL
-        GGML_TYPE_TURBO4_0  = 45, // TurboQuant 4-bit KV cache: 3-bit PolarQuant + 1-bit QJL
-        GGML_TYPE_TURBO2_0  = 46, // TurboQuant 2-bit KV cache: 2-bit PolarQuant (no QJL)
-        GGML_TYPE_COUNT     = 47,
+        GGML_TYPE_Q1_0      = 43, // local 32-block 1-bit
+        GGML_TYPE_TURBO3_0  = 44, // TurboQuant 3-bit KV cache (TheTom: WHT + 3-bit PolarQuant)
+        GGML_TYPE_TURBO4_0  = 45, // TurboQuant 4-bit KV cache (TheTom: WHT + 4-bit PolarQuant)
+        GGML_TYPE_TURBO2_0  = 46, // TurboQuant 2-bit KV cache (TheTom: WHT + 2-bit PolarQuant)
+        GGML_TYPE_TQ3_1S    = 47, // TurboQuant 3-bit weight: WHT-rotated 8-level Lloyd-Max, block_size=32
+        GGML_TYPE_TQ4_1S    = 48, // TurboQuant 4-bit weight: WHT-rotated 16-level Lloyd-Max, block_size=32
+        GGML_TYPE_COUNT     = 49,
     };
 
     // precision
