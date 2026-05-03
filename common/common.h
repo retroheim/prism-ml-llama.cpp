@@ -2,9 +2,10 @@
 
 #pragma once
 
+#include "llama-cpp.h"
+
 #include "ggml-opt.h"
 #include "ggml.h"
-#include "llama-cpp.h"
 
 #include <set>
 #include <sstream>
@@ -27,11 +28,6 @@
 #define die(msg)          do { fputs("error: " msg "\n", stderr);                exit(1); } while (0)
 #define die_fmt(fmt, ...) do { fprintf(stderr, "error: " fmt "\n", __VA_ARGS__); exit(1); } while (0)
 
-#define print_build_info() do {                                                                     \
-    fprintf(stderr, "%s: build = %d (%s)\n",      __func__, LLAMA_BUILD_NUMBER, LLAMA_COMMIT);      \
-    fprintf(stderr, "%s: built with %s for %s\n", __func__, LLAMA_COMPILER, LLAMA_BUILD_TARGET);    \
-} while(0)
-
 struct common_time_meas {
     common_time_meas(int64_t & t_acc, bool disable = false);
     ~common_time_meas();
@@ -52,14 +48,6 @@ struct common_adapter_lora_info {
 };
 
 using llama_tokens = std::vector<llama_token>;
-
-// build info
-extern int LLAMA_BUILD_NUMBER;
-extern const char * LLAMA_COMMIT;
-extern const char * LLAMA_COMPILER;
-extern const char * LLAMA_BUILD_TARGET;
-
-const static std::string build_info("b" + std::to_string(LLAMA_BUILD_NUMBER) + "-" + LLAMA_COMMIT);
 
 struct common_control_vector_load_info;
 
@@ -579,8 +567,9 @@ struct common_params {
     int32_t n_threads_http      = -1;    // number of threads to process HTTP requests (TODO: support threadpool)
     int32_t n_cache_reuse       = 0;     // min chunk size to reuse from the cache via KV shifting
     bool    cache_prompt        = true;  // whether to enable prompt caching
-    int32_t n_ctx_checkpoints   = 32;     // max number of context checkpoints per slot
-    int32_t checkpoint_every_nt = 8192;   // make a checkpoint every n tokens during prefill
+    bool    clear_idle          = true;  // save and clear idle slots upon starting a new task
+    int32_t n_ctx_checkpoints   = 32;    // max number of context checkpoints per slot
+    int32_t checkpoint_every_nt = 8192;  // make a checkpoint every n tokens during prefill
     int32_t cache_ram_mib       = 8192;  // -1 = no limit, 0 - disable, 1 = 1 MiB, etc.
 
     std::string hostname      = "127.0.0.1";

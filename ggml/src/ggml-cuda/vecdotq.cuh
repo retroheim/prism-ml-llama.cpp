@@ -156,6 +156,8 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q1_0_q8_1_imp
     // ds8f.x is the scale from Q8_1, ds8f.y is the precomputed sum (not needed for symmetric quant)
     return d1 * ds8f.x * sumi;
 }
+#define VDR_Q2_0_Q8_1_MMVQ 1  // Process one 32-element chunk at a time for parallelism
+#define VDR_Q2_0_Q8_1_MMQ  4  // Q2_0 has 256 bits (8 ints) per block, 4 32-element chunks
 
 #define VDR_Q4_0_Q8_1_MMVQ 2
 #define VDR_Q4_0_Q8_1_MMQ  4
