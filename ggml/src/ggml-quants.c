@@ -97,6 +97,10 @@ void quantize_row_q1_0_g128_ref(const float * GGML_RESTRICT x, block_q1_0_g128 *
             if (x[i*qk + j] >= 0.0f) {
                 y[i].qs[byte_index] |= (1 << bit_offset);
             }
+        }
+    }
+}
+
 void quantize_row_q2_0_ref(const float * GGML_RESTRICT x, block_q2_0 * GGML_RESTRICT y, int64_t k) {
     static const int qk = QK2_0;
 
@@ -474,11 +478,6 @@ void dequantize_row_q1_0_g128(const block_q1_0_g128 * GGML_RESTRICT x, float * G
         const float d = GGML_FP16_TO_FP32(x[i].d);
         const float neg_d = -d;
 
-        for (int j = 0; j < qk; ++j) {
-            const int byte_index = j / 8;
-            const int bit_offset = j % 8;
-            const uint8_t bit = (x[i].qs[byte_index] >> bit_offset) & 1;
-            y[i*qk + j] = bit ? d : neg_d;
         for (int j = 0; j < qk; ++j) {
             const int byte_index = j / 8;
             const int bit_offset = j % 8;
@@ -5507,6 +5506,7 @@ bool ggml_validate_row_data(enum ggml_type type, const void * data, size_t nbyte
         case GGML_TYPE_Q1_0_g128:
             {
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_q1_0_g128, data, nb);
+            } break;
         case GGML_TYPE_Q2_0:
             {
                 VALIDATE_ROW_DATA_D_F16_IMPL(block_q2_0, data, nb);
