@@ -7,6 +7,7 @@
 #include "llama-mmap.h"
 #include "llama-cparams.h"
 #include "llama-model-loader.h"
+#include "llama-split-graph.h"
 
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
@@ -32,6 +33,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const struct ggml_tensor * tensor, void * userdata) {
@@ -596,12 +598,13 @@ static buft_list_t make_cpu_buft_list(const std::vector<llama_device> & devices,
     return buft_list;
 }
 
-// GPU: split if LLAMA_SPLIT_MODE_ROW -> GPU
+// GPU: split if LLAMA_SPLIT_MODE_ROW or LLAMA_SPLIT_MODE_GRAPH -> GPU
 static buft_list_t make_gpu_buft_list(ggml_backend_dev_t dev, llama_split_mode split_mode, const float * tensor_split) {
     buft_list_t buft_list;
 
     // add the device split buffer type if requested and available
-    if (split_mode == LLAMA_SPLIT_MODE_ROW) {
+    // (ik_llama port: graph mode reuses ROW's split buffer path)
+    if (llama_split_graph::wants_split_buffer(split_mode)) {
         ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
         auto ggml_backend_split_buffer_type_fn = (ggml_backend_split_buffer_type_t)
             ggml_backend_reg_get_proc_address(reg, "ggml_backend_split_buffer_type");
@@ -676,6 +679,9 @@ struct llama_model::impl {
     std::vector<layer_dev> dev_layer;
 
     bool has_tensor_overrides;
+
+    // ik_llama port (split-mode-graph): registry of tensors with ggml_split_tensor_t extras.
+    std::unordered_set<const ggml_tensor *> split_graph_tensors;
 };
 
 llama_model::llama_model(const llama_model_params & params) : params(params), pimpl(std::make_unique<impl>()) {
@@ -686,6 +692,14 @@ llama_model::~llama_model() {
     for (auto * lora : loras) {
         delete lora;
     }
+}
+
+void llama_model::register_split_graph_tensor(const ggml_tensor * t) const {
+    pimpl->split_graph_tensors.insert(t);
+}
+
+bool llama_model::is_split_graph_tensor(const ggml_tensor * t) const {
+    return pimpl->split_graph_tensors.find(t) != pimpl->split_graph_tensors.end();
 }
 
 void llama_model::load_stats(llama_model_loader & ml) {
@@ -9112,6 +9126,7 @@ llama_model_params llama_model_default_params() {
         /*.use_extra_bufts             =*/ true,
         /*.no_host                     =*/ false,
         /*.no_alloc                    =*/ false,
+        /*.n_gpus_max_split_mode_graph =*/ 0,
     };
 
     return result;

@@ -200,6 +200,7 @@ extern "C" {
         LLAMA_SPLIT_MODE_LAYER  = 1, // split layers and KV across GPUs
         LLAMA_SPLIT_MODE_ROW    = 2, // split layers and KV across GPUs, use tensor parallelism if supported
         LLAMA_SPLIT_MODE_TENSOR = 3,
+        LLAMA_SPLIT_MODE_GRAPH  = 4, // ik_llama port: graph-level split with cross-GPU KV sync, hybrid CPU offload friendly
     };
 
     // TODO: simplify (https://github.com/ggml-org/llama.cpp/pull/9294#pullrequestreview-2286561979)
@@ -323,6 +324,9 @@ extern "C" {
         bool use_extra_bufts; // use extra buffer types (used for weight repacking)
         bool no_host;         // bypass host buffer allowing extra buffers to be used
         bool no_alloc;        // only load metadata and simulate memory allocations
+
+        // ik_llama port: max GPUs to use in LLAMA_SPLIT_MODE_GRAPH (0 = use all)
+        int32_t n_gpus_max_split_mode_graph;
     };
 
     struct llama_sampler_seq_config {
@@ -378,6 +382,8 @@ extern "C" {
         bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
+
+        bool split_mode_graph_scheduling; // ik_llama port: force split mode graph scheduling even with tensor overrides (-smgs)
 
         // [EXPERIMENTAL]
         // backend sampler chain configuration (make sure the caller keeps the sampler chains alive)

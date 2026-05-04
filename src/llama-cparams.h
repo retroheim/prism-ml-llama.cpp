@@ -39,6 +39,7 @@ struct llama_cparams {
     bool op_offload;
     bool kv_unified;
     bool pipeline_parallel;
+    bool split_mode_graph_scheduling; // ik_llama port: -smgs override
 
     enum llama_pooling_type pooling_type;
 

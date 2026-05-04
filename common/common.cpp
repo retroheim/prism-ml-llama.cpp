@@ -1459,10 +1459,11 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
         mparams.devices = params.devices.data();
     }
 
-    mparams.n_gpu_layers    = params.n_gpu_layers;
-    mparams.main_gpu        = params.main_gpu;
-    mparams.split_mode      = params.split_mode;
-    mparams.tensor_split    = params.tensor_split;
+    mparams.n_gpu_layers              = params.n_gpu_layers;
+    mparams.main_gpu                  = params.main_gpu;
+    mparams.split_mode                = params.split_mode;
+    mparams.n_gpus_max_split_mode_graph = params.n_gpus_max_split_mode_graph;
+    mparams.tensor_split              = params.tensor_split;
     mparams.use_mmap        = params.use_mmap;
     mparams.use_direct_io   = params.use_direct_io;
     mparams.use_mlock       = params.use_mlock;
@@ -1520,6 +1521,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.op_offload        = !params.no_op_offload;
     cparams.swa_full          = params.swa_full;
     cparams.kv_unified        = params.kv_unified;
+    cparams.split_mode_graph_scheduling = params.split_mode_graph_scheduling;
 
     cparams.type_k = params.cache_type_k;
     cparams.type_v = params.cache_type_v;

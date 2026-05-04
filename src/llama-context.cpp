@@ -9,6 +9,7 @@
 #include "llama-memory.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
+#include "llama-split-io.h"
 #include "llama-ext.h"
 #include "llama.h"
 
@@ -165,6 +166,7 @@ llama_context::llama_context(
 
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
+    cparams.split_mode_graph_scheduling = params.split_mode_graph_scheduling;
 
     // initialized later
     cparams.pipeline_parallel = false;
@@ -412,6 +414,16 @@ void llama_context::sched_reserve() {
 
     sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, cparams.pipeline_parallel, cparams.op_offload));
 
+    // ik_llama port: enable split-mode-graph hint on the scheduler when applicable.
+    // -smgs forces it on even with tensor overrides; otherwise tensor overrides skip it.
+    if (model.split_mode() == LLAMA_SPLIT_MODE_GRAPH &&
+        (!model.has_tensor_overrides() || cparams.split_mode_graph_scheduling)) {
+        ggml_backend_sched_set_split_mode_graph(sched.get(), true);
+        if (model.has_tensor_overrides() && cparams.split_mode_graph_scheduling) {
+            LLAMA_LOG_INFO("%s: split-mode-graph scheduling FORCED via -smgs despite tensor overrides\n", __func__);
+        }
+    }
+
     llama_memory_context_ptr mctx;
     if (memory) {
         LLAMA_LOG_DEBUG("%s: reserving full memory module\n", __func__);
@@ -565,6 +577,10 @@ void llama_context::sched_reserve() {
                 LLAMA_LOG_WARN("%s: compute buffer allocation failed, retrying without pipeline parallelism\n", __func__);
                 cparams.pipeline_parallel = false;
                 sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, false, cparams.op_offload));
+                if (model.split_mode() == LLAMA_SPLIT_MODE_GRAPH &&
+                    (!model.has_tensor_overrides() || cparams.split_mode_graph_scheduling)) {
+                    ggml_backend_sched_set_split_mode_graph(sched.get(), true);
+                }
                 gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get());
             }
             if (!gf) {
@@ -2254,26 +2270,20 @@ public:
     llama_io_write_buffer(
             uint8_t * p, size_t len) : ptr(p), buf_size(len) {}
 
+    // ik_llama port: optional model lookup for split-mode-graph tensor dispatch.
+    void set_split_dispatch_model(const llama_model * m) { split_model = m; }
+
     ~llama_io_write_buffer() {
-#if 1
         // TODO: add backend support to batch tensor_get? or some other way to speed this up
+        std::vector<uint8_t> aux;
         for (const auto & info : winfos) {
-            ggml_backend_tensor_get(info.tensor, info.ptr, info.offset, info.size);
-        }
-#else
-        // flush the writes asynchronously
-        // this helps on Macs, but on other devices - it does not. just an example
-        std::vector<std::future<void>> futures;
-        futures.reserve(winfos.size());
-        for (const auto & info : winfos) {
-            futures.push_back(std::async(std::launch::async, [info]() {
+            if (split_model && split_model->is_split_graph_tensor(info.tensor)) {
+                // ik_llama port: assembled split-aware copy into the user's buffer.
+                llama_split_io_write_tensor_rows(info.ptr, info.tensor, aux, info.offset, info.size);
+            } else {
                 ggml_backend_tensor_get(info.tensor, info.ptr, info.offset, info.size);
-            }));
+            }
         }
-        for (auto & f : futures) {
-            f.wait();
-        }
-#endif
     }
 
     void write(const void * src, size_t size) override {
@@ -2315,15 +2325,34 @@ private:
         size_t offset;
     };
     std::vector<write_info> winfos;
+
+    const llama_model * split_model = nullptr; // ik_llama port: split-mode-graph dispatch
 };
 
 class llama_io_read_buffer : public llama_io_read_i {
 public:
     llama_io_read_buffer(const uint8_t * p, size_t len) : ptr(p), buf_size(len) {}
 
+    // ik_llama port: optional model lookup for split-mode-graph tensor dispatch.
+    void set_split_dispatch_model(const llama_model * m) { split_model = m; }
+
     ~llama_io_read_buffer() {
         // flush the reads
         for (const auto & info : rinfos) {
+            if (split_model && split_model->is_split_graph_tensor(info.tensor)) {
+                // ik_llama port: distribute the host buffer's row layout into per-device sub-tensors.
+                // Currently uses the no-kv variant (row width derived from tensor's own ne[0]).
+                // The KV variant requires cross-tensor lookup of the matching wk/wv, which is
+                // handled in the KV-cache-specific read path (Phase 3.4 hookup).
+                const size_t nb1 = info.tensor->nb[1];
+                if (nb1 > 0 && info.size % nb1 == 0) {
+                    const int nrows = (int)(info.size / nb1);
+                    llama_split_io_read_kv_cache_rows(info.tensor, nullptr, info.ptr,
+                                                     /*head=*/info.offset / nb1,
+                                                     /*row_size=*/nb1, nrows);
+                    continue;
+                }
+            }
             ggml_backend_tensor_set(info.tensor, info.ptr, info.offset, info.size);
         }
     }
@@ -2367,11 +2396,16 @@ private:
         size_t offset;
     };
     std::vector<read_info> rinfos;
+
+    const llama_model * split_model = nullptr; // ik_llama port: split-mode-graph dispatch
 };
 
 class llama_io_write_file : public llama_io_write_i {
 public:
     llama_io_write_file(llama_file * f) : file(f) {}
+
+    // ik_llama port: optional model lookup for split-mode-graph tensor dispatch.
+    void set_split_dispatch_model(const llama_model * m) { split_model = m; }
 
     void write(const void * src, size_t size) override {
         file->write_raw(src, size);
@@ -2380,7 +2414,11 @@ public:
 
     void write_tensor(const ggml_tensor * tensor, size_t offset, size_t size) override {
         temp_buffer.resize(size);
-        ggml_backend_tensor_get(tensor, temp_buffer.data(), offset, size);
+        if (split_model && split_model->is_split_graph_tensor(tensor)) {
+            llama_split_io_write_tensor_rows(temp_buffer.data(), tensor, aux_buffer, offset, size);
+        } else {
+            ggml_backend_tensor_get(tensor, temp_buffer.data(), offset, size);
+        }
         write(temp_buffer.data(), temp_buffer.size());
     }
 
@@ -2392,11 +2430,16 @@ private:
     llama_file * file;
     size_t size_written = 0;
     std::vector<uint8_t> temp_buffer;
+    std::vector<uint8_t> aux_buffer; // ik_llama port: scratch for split-aware writes
+    const llama_model * split_model = nullptr;
 };
 
 class llama_io_read_file : public llama_io_read_i {
 public:
     llama_io_read_file(llama_file * f) : file(f) {}
+
+    // ik_llama port: optional model lookup for split-mode-graph tensor dispatch.
+    void set_split_dispatch_model(const llama_model * m) { split_model = m; }
 
     void read(void * dst, size_t size) override {
         file->read_raw(dst, size);
@@ -2406,6 +2449,15 @@ public:
     void read_tensor(ggml_tensor * tensor, size_t offset, size_t size) override {
         temp_buffer.resize(size);
         read(temp_buffer.data(), size);
+        if (split_model && split_model->is_split_graph_tensor(tensor)) {
+            const size_t nb1 = tensor->nb[1];
+            if (nb1 > 0 && size % nb1 == 0) {
+                llama_split_io_read_kv_cache_rows(tensor, /*kv_for_dims=*/nullptr, temp_buffer.data(),
+                                                 /*head=*/offset / nb1,
+                                                 /*row_size=*/nb1, (int)(size / nb1));
+                return;
+            }
+        }
         ggml_backend_tensor_set(tensor, temp_buffer.data(), offset, size);
     }
 
@@ -2417,6 +2469,7 @@ private:
     llama_file * file;
     size_t size_read = 0;
     std::vector<uint8_t> temp_buffer;
+    const llama_model * split_model = nullptr; // ik_llama port: split-mode-graph dispatch
 };
 
 size_t llama_context::state_get_size() {
@@ -2431,6 +2484,7 @@ size_t llama_context::state_get_size() {
 
 size_t llama_context::state_get_data(uint8_t * dst, size_t size) {
     llama_io_write_buffer io(dst, size);
+    io.set_split_dispatch_model(&model);
     try {
         return state_write_data(io);
     } catch (const std::exception & err) {
@@ -2441,6 +2495,7 @@ size_t llama_context::state_get_data(uint8_t * dst, size_t size) {
 
 size_t llama_context::state_set_data(const uint8_t * src, size_t size) {
     llama_io_read_buffer io(src, size);
+    io.set_split_dispatch_model(&model);
     try {
         return state_read_data(io);
     } catch (const std::exception & err) {
@@ -2461,6 +2516,7 @@ size_t llama_context::state_seq_get_size(llama_seq_id seq_id, llama_state_seq_fl
 
 size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, size_t size, llama_state_seq_flags flags) {
     llama_io_write_buffer io(dst, size);
+    io.set_split_dispatch_model(&model);
     try {
         return state_seq_write_data(io, seq_id, flags);
     } catch (const std::exception & err) {
@@ -2471,6 +2527,7 @@ size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, siz
 
 size_t llama_context::state_seq_set_data(llama_seq_id seq_id, const uint8_t * src, size_t size, llama_state_seq_flags flags) {
     llama_io_read_buffer io(src, size);
+    io.set_split_dispatch_model(&model);
     try {
         return state_seq_read_data(io, seq_id, flags);
     } catch (const std::exception & err) {
@@ -2511,6 +2568,7 @@ bool llama_context::state_load_file(const char * filepath, llama_token * tokens_
         const size_t n_state_size_cur = file.size() - file.tell();
 
         llama_io_read_file io( &file);
+        io.set_split_dispatch_model(&model);
         const size_t n_read = state_read_data(io);
 
         if (n_read != n_state_size_cur) {
@@ -2534,6 +2592,7 @@ bool llama_context::state_save_file(const char * filepath, const llama_token * t
 
     // save the context state using stream saving
     llama_io_write_file io(&file);
+    io.set_split_dispatch_model(&model);
     state_write_data(io);
 
     return true;
@@ -2570,6 +2629,7 @@ size_t llama_context::state_seq_load_file(llama_seq_id seq_id, const char * file
     {
         const size_t state_size = file.size() - file.tell();
         llama_io_read_file io(&file);
+        io.set_split_dispatch_model(&model);
         const size_t nread = state_seq_read_data(io, seq_id, 0);
         if (!nread) {
             LLAMA_LOG_ERROR("%s: failed to restore sequence state\n", __func__);
@@ -2594,6 +2654,7 @@ size_t llama_context::state_seq_save_file(llama_seq_id seq_id, const char * file
 
     // save the context state using stream saving
     llama_io_write_file io(&file);
+    io.set_split_dispatch_model(&model);
     state_seq_write_data(io, seq_id, 0);
 
     const size_t res = file.tell();
@@ -2973,6 +3034,7 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
+        /*.split_mode_graph_scheduling =*/ false,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
     };

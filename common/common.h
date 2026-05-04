@@ -463,6 +463,10 @@ struct common_params {
 
     enum llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER; // how to split the model across GPUs
 
+    // ik_llama port: split-mode-graph (multi-GPU) tuning
+    bool    split_mode_graph_scheduling = false; // -smgs: force sm graph scheduling even with tensor overrides
+    int32_t n_gpus_max_split_mode_graph = 0;     // 0 = use all available GPUs
+
     common_cpu_params cpuparams;
     common_cpu_params cpuparams_batch;
 

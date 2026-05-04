@@ -825,6 +825,10 @@ struct ggml_backend_sched {
     int debug_realloc;
     int debug_graph_size;
     int debug_prev_graph_size;
+
+    // ik_llama port: split-mode-graph hints (stub state, no scheduler logic yet)
+    bool   split_mode_graph;
+    size_t max_extra_alloc;
 };
 
 #define hash_id(tensor) ggml_hash_find_or_insert(&sched->hash_set, tensor)
@@ -1912,6 +1916,28 @@ void ggml_backend_sched_synchronize(ggml_backend_sched_t sched) {
         // which avoids changes in the graph that could cause CUDA or other graphs to be disabled
         sched->next_copy = 0;
     }
+}
+
+void ggml_backend_sched_set_split_mode_graph(ggml_backend_sched_t sched, bool enabled) {
+    GGML_ASSERT(sched);
+    sched->split_mode_graph = enabled;
+}
+
+bool ggml_backend_sched_get_split_mode_graph(ggml_backend_sched_t sched) {
+    GGML_ASSERT(sched);
+    return sched->split_mode_graph;
+}
+
+void ggml_backend_sched_set_max_extra_alloc(ggml_backend_sched_t sched, int extra_alloc_MiB) {
+    GGML_ASSERT(sched);
+    if (extra_alloc_MiB >= 0) {
+        sched->max_extra_alloc = (size_t) extra_alloc_MiB * 1024 * 1024;
+    }
+}
+
+int ggml_backend_sched_get_max_extra_alloc(ggml_backend_sched_t sched) {
+    GGML_ASSERT(sched);
+    return (int) (sched->max_extra_alloc / (1024 * 1024));
 }
 
 void ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data) {

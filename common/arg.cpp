@@ -2342,12 +2342,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_N_GPU_LAYERS"));
     add_opt(common_arg(
-        {"-sm", "--split-mode"}, "{none,layer,row,tensor}",
+        {"-sm", "--split-mode"}, "{none,layer,row,tensor,graph}",
         "how to split the model across multiple GPUs, one of:\n"
         "- none: use one GPU only\n"
         "- layer (default): split layers and KV across GPUs (pipelined)\n"
         "- row: split weight across GPUs by rows (parallelized)\n"
-        "- tensor: split weights and KV across GPUs (parallelized, EXPERIMENTAL)",
+        "- tensor: split weights and KV across GPUs (parallelized, EXPERIMENTAL)\n"
+        "- graph: graph-level split with cross-GPU KV sync, hybrid CPU offload friendly (ik_llama port)",
         [](common_params & params, const std::string & value) {
             if (value == "none") {
                 params.split_mode = LLAMA_SPLIT_MODE_NONE;
@@ -2357,6 +2358,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 params.split_mode = LLAMA_SPLIT_MODE_ROW;
             } else if (value == "tensor") {
                 params.split_mode = LLAMA_SPLIT_MODE_TENSOR;
+            } else if (value == "graph") {
+                params.split_mode = LLAMA_SPLIT_MODE_GRAPH;
             } else {
                 throw std::invalid_argument("invalid value");
             }
@@ -2365,6 +2368,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_env("LLAMA_ARG_SPLIT_MODE"));
+    add_opt(common_arg(
+        {"-smgs", "--split-mode-graph-scheduling"},
+        "force split mode graph scheduling even when tensor overrides are active (ik_llama port)",
+        [](common_params & params) {
+            params.split_mode_graph_scheduling = true;
+        }
+    ).set_env("LLAMA_ARG_SPLIT_MODE_GRAPH_SCHEDULING"));
+    add_opt(common_arg(
+        {"--max-gpus-split-mode-graph"}, "N",
+        "max number of GPUs to use in split mode graph (default: 0 = all available)",
+        [](common_params & params, int value) {
+            params.n_gpus_max_split_mode_graph = value;
+        }
+    ).set_env("LLAMA_ARG_MAX_GPUS_SPLIT_MODE_GRAPH"));
     add_opt(common_arg(
         {"-ts", "--tensor-split"}, "N0,N1,N2,...",
         "fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1",

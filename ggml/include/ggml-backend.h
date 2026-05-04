@@ -351,6 +351,15 @@ extern "C" {
     // Set a callback to be called for each resulting node during graph compute
     GGML_API void                 ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data);
 
+    // ik_llama port: split-mode-graph hooks
+    // When enabled, the scheduler is hinted that the model is using LLAMA_SPLIT_MODE_GRAPH
+    // (cross-GPU KV sync, hybrid CPU offload friendly). Currently a flag-only stub: behavior
+    // delegates to the existing per-row split path; intelligent scheduler logic is a follow-up.
+    GGML_API void                 ggml_backend_sched_set_split_mode_graph(ggml_backend_sched_t sched, bool enabled);
+    GGML_API bool                 ggml_backend_sched_get_split_mode_graph(ggml_backend_sched_t sched);
+    GGML_API void                 ggml_backend_sched_set_max_extra_alloc(ggml_backend_sched_t sched, int extra_alloc_MiB);
+    GGML_API int                  ggml_backend_sched_get_max_extra_alloc(ggml_backend_sched_t sched);
+
     //
     // Meta backend
     //
