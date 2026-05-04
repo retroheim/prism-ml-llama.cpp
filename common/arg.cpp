@@ -3565,7 +3565,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
-        {"--spec-type"}, "[none|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]",
+        {"--spec-type"}, "[none|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod|suffix]",
         string_format("type of speculative decoding to use when no draft model is provided (default: %s)\n",
             common_speculative_type_to_str(params.speculative.type).c_str()),
         [](common_params & params, const std::string & value) {
@@ -3581,11 +3581,57 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V;
             } else if (value == "ngram-mod") {
                 params.speculative.type = COMMON_SPECULATIVE_TYPE_NGRAM_MOD;
+            } else if (value == "suffix") {
+                params.speculative.type = COMMON_SPECULATIVE_TYPE_SUFFIX;
             } else {
                 throw std::invalid_argument("unknown speculative decoding type without draft model");
             }
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_TYPE"));
+    add_opt(common_arg(
+        {"--spec-suffix-max-depth"}, "N",
+        string_format("suffix-tree max depth for spec-type=suffix (default: %d)", params.speculative.suffix.max_depth),
+        [](common_params & params, int value) {
+            if (value < 1 || value > 1024) {
+                throw std::invalid_argument("suffix max-depth must be between 1 and 1024 inclusive");
+            }
+            params.speculative.suffix.max_depth = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--spec-suffix-min-match-len"}, "N",
+        string_format("suffix-tree minimum match length before proposing draft (default: %d)", params.speculative.suffix.min_match_len),
+        [](common_params & params, int value) {
+            if (value < 1 || value > 1024) {
+                throw std::invalid_argument("suffix min-match-len must be between 1 and 1024 inclusive");
+            }
+            params.speculative.suffix.min_match_len = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--spec-suffix-n-max"}, "N",
+        string_format("suffix-tree max draft tokens per call (default: %d)", params.speculative.suffix.n_max),
+        [](common_params & params, int value) {
+            if (value < 0 || value > 1024) {
+                throw std::invalid_argument("suffix n-max must be between 0 and 1024 inclusive");
+            }
+            params.speculative.suffix.n_max = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--spec-suffix-p-min"}, "F",
+        string_format("suffix-tree minimum branch probability (default: %.2f)", (double)params.speculative.suffix.p_min),
+        [](common_params & params, const std::string & value) {
+            params.speculative.suffix.p_min = std::stof(value);
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--spec-suffix-corpus"}, "FNAME",
+        "optional offline corpus (.json or .bin) to prewarm the suffix tree",
+        [](common_params & params, const std::string & value) {
+            params.speculative.suffix.corpus_path = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
         {"--spec-ngram-mod-n-min"}, "N",
         string_format("minimum number of ngram tokens to use for ngram-based speculative decoding (default: %d)", params.speculative.ngram_mod.n_min),

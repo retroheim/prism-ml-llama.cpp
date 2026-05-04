@@ -164,6 +164,7 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
     COMMON_SPECULATIVE_TYPE_NGRAM_MOD,
     COMMON_SPECULATIVE_TYPE_NGRAM_CACHE,   // self-speculative decoding with 3-level n-gram cache
+    COMMON_SPECULATIVE_TYPE_SUFFIX,        // suffix-tree self-speculative decoding (Saxena et al. 2024)
     COMMON_SPECULATIVE_TYPE_COUNT          // number of types, unknown type
 };
 
@@ -347,6 +348,14 @@ struct common_params_speculative_ngram_cache {
     std::string lookup_cache_dynamic; // path of dynamic ngram cache file for lookup decoding
 };
 
+struct common_params_speculative_suffix {
+    int32_t     max_depth     = 64;   // maximum trie depth (max stored suffix length)
+    int32_t     min_match_len = 5;    // minimum context-match length for proposing a draft
+    int32_t     n_max         = 16;   // maximum draft tokens per call
+    float       p_min         = 0.1f; // minimum branch probability
+    std::string corpus_path;          // optional offline corpus for prewarming the tree (.json or .bin)
+};
+
 struct common_params_speculative {
     // TODO: become a vector in order to support "chains of speculators"
     common_speculative_type type = COMMON_SPECULATIVE_TYPE_NONE;
@@ -359,6 +368,7 @@ struct common_params_speculative {
     common_params_speculative_ngram_map ngram_map_k4v;
 
     common_params_speculative_ngram_cache ngram_cache;
+    common_params_speculative_suffix      suffix;
 
     bool has_dft() const {
         return !draft.mparams.path.empty() || !draft.mparams.hf_repo.empty();
