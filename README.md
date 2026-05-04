@@ -8,15 +8,17 @@
 | base        | [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) (`master`)                              | upstream llama.cpp                                    |
 | weights     | [PrismML-Eng/llama.cpp](https://github.com/PrismML-Eng/llama.cpp) (`prism`)                         | Bonsai 1-bit (Q1_0/Q1_0_g128) + 2-bit (Q2_0)          |
 | TurboQuant  | [TheTom/llama-cpp-turboquant](https://github.com/TheTom/llama-cpp-turboquant) (`feature/turboquant-kv-cache`) | TURBO2/3/4 KV cache + TQ3_1S/TQ4_1S weight quants (WHT-rotated) |
-| TriAttention| [atomicmilkshake/llama-cpp-turboquant](https://github.com/atomicmilkshake/llama-cpp-turboquant) (legacy import)  | KV cache eviction (`--triattention-*` args) |
+| ik\_llama   | [ikawrakow/ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp)                                 | suffix-tree self-speculative decoding, `llama-sweep-bench`, `-sm graph` multi-GPU split mode (`-smgs`) |
 | performance | this fork                                                                                           | AVX2/NEON SIMD for Q1_0/Q1_0_g128/Q2_0 dot products   |
 
 ## What you get
 
 - **1.125 bpw weights** via Q1_0_g128 (Bonsai) — ~7× smaller than fp16
 - **3-bit KV cache** via TURBO3_0 (TurboQuant: PolarQuant + 1-bit QJL) — ~5× compression
-- **Longer context per VRAM** via TriAttention KV pruning
 - **AVX2 dot product** for all 1-bit/2-bit weight types on x86, NEON on ARM
+- **Suffix-tree speculative decoding** (`--spec-type suffix`) — KV-cache-history self-speculation, no draft model required ([ik\_llama PR #1454](https://github.com/ikawrakow/ik_llama.cpp/pull/1454))
+- **`llama-sweep-bench`** — sweep PP/TG perf across rising n\_kv at fixed n\_ubatch ([ik\_llama PR #1468](https://github.com/ikawrakow/ik_llama.cpp/pull/1468))
+- **`-sm graph` multi-GPU split mode** + `-smgs` scheduler hint ([ik\_llama PRs #1048/#1051/#1068](https://github.com/ikawrakow/ik_llama.cpp))
 
 ## Quick start (CPU / CUDA / nix)
 
@@ -77,14 +79,14 @@ scripts/sync-upstreams.sh merge --yes # auto-merge all (stops on conflict)
 ```
 
 The script manages remotes (`ggml`, `prismml`, `turboquant`), fetches their
-tracked refs (`master`, `prism`, `feature/triattention`), and reports
+tracked refs (`master`, `prism`, `feature/turboquant-kv-cache`), and reports
 behind/ahead counts. On conflict it stops and lists the unmerged files;
 resolve, `git add`, `git commit`, and re-run `status` to verify.
 
 ## Caveats
 
 - **ABI**: don't move `Q2_0=42` or `LLAMA_FTYPE_MOSTLY_Q2_0=41` — every shipping Bonsai Q2_0 GGUF depends on those IDs.
-- **TurboQuant on CUDA**: KV cache types require the `cuda` build (`triattention_gpu_*` symbols are CUDA-only; CPU build ships weak stubs that do nothing).
+- **TurboQuant on CUDA**: KV cache types (TURBO2/3/4) require the `cuda` build.
 - **Q1_0 (32-block)** is local-only and was renumbered from 42 → 43 during the ABI fix. GGUFs created before that renumber need re-quantization.
 - **Q2_0 MMQ**: enabled with the trait specialization in `ggml-cuda/mmq.cuh`. Q1_0/Q1_0_g128 MMQ disabled per a known accuracy issue (vec_dot path used instead).
 
@@ -96,10 +98,11 @@ resolve, `git add`, `git commit`, and re-run `status` to verify.
 [![GitHub](https://img.shields.io/badge/github-atomicmilkshake%2Fllama--cpp--turboquant-blue?logo=github)](https://github.com/atomicmilkshake/llama-cpp-turboquant)
 [![HuggingFace](https://img.shields.io/badge/🤗%20HuggingFace-binaries-yellow)](https://huggingface.co/atomicmilkshake/llama-cpp-turboquant-binaries)
 
-A fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) with two major additions:
+A fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) tracking three upstreams:
 
 - **TurboQuant** — custom low-bit quantization formats (turbo2, turbo3, turbo4) with hardware-optimised CUDA kernels for faster inference with smaller memory footprint
-- **TriAttention** — GPU-accelerated KV cache pruning ([arXiv 2604.04921](https://arxiv.org/abs/2604.04921)) that scores token importance using RoPE-inverted key vectors and evicts low-value tokens, enabling long-context inference within a fixed memory budget
+- **Bonsai 1-bit / 2-bit weights** — Q1\_0\_g128 (1.125 bpw) and Q2\_0 (2.125 bpw) with AVX2/NEON dot products
+- **ik\_llama integrations** — suffix-tree self-speculative decoding, `llama-sweep-bench` perf tool, and `-sm graph` multi-GPU split mode (see [ikawrakow/ik\_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp))
 
 ## Pre-built Windows Binaries
 
@@ -111,56 +114,57 @@ Download the latest Release build (Windows x64, CUDA 13, RTX 2000+) from Hugging
 
 ---
 
-## TriAttention
+## ik\_llama integrations
 
-TriAttention keeps your KV cache within a fixed token budget by periodically scoring all cached tokens and evicting the least important ones. Scoring uses the geometric structure of RoPE-encoded key vectors — no additional model weights or fine-tuning required.
+Selected features ported from [ikawrakow/ik\_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) and adapted to prism's refactored `src/llama-*.cpp` module layout.
 
-### Performance (Qwen3-8B Q4\_K\_M, RTX 3080, `-c 512`)
+### Suffix-tree self-speculative decoding
 
-| Mode | Prune overhead | Generation speed |
-|------|---------------|-----------------|
-| No budget limit | — | 17.5 tok/s |
-| CPU scoring | ~5,900 ms/event | 17.5 tok/s |
-| **GPU scoring** | **~4–9 ms/event** | **75.0 tok/s** |
-
-GPU scoring is ~1,000× faster than CPU. The 4.3× generation speedup comes from keeping the KV cache within VRAM budget (no eviction stalls, consistent flash-attention batch sizes).
-
-### Quick start
+Trie-based self-speculation that mines repeating patterns in the KV cache history (Saxena et al. 2024, [arXiv:2411.04975](https://arxiv.org/abs/2411.04975)) — no secondary draft model needed.
 
 ```bash
-llama-server.exe -m YourModel.gguf -c 32768 -ngl 99 --port 8080 \
-  --triattention-stats model.triattention \
-  --triattention-budget 4096 \
-  --triattention-window 256 \
-  --triattention-log
+llama-server -m YourModel.gguf -ngl 99 \
+  --spec-type suffix \
+  --spec-suffix-min-match-len 5 \
+  --spec-suffix-max-depth 64 \
+  --spec-suffix-n-max 16 \
+  --spec-suffix-p-min 0.1
 ```
-
-A `.triattention` calibration file is required. Generate one from a representative text corpus:
-
-```bash
-llama-cli.exe -m YourModel.gguf -ngl 99 \
-  --triattention-calibrate corpus.txt \
-  --triattention-calibrate-out model.triattention
-```
-
-### CLI flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--triattention-stats <file>` | *(none)* | Calibration file — **required to enable TriAttention** |
-| `--triattention-budget <n>` | `512` | Maximum KV tokens to retain after each prune |
-| `--triattention-window <n>` | `64` | Most-recent N tokens always protected from eviction |
-| `--triattention-trigger <mode>` | `slack` | When to prune: `slack` (budget+window), `interval`, `fill` |
-| `--triattention-log` | off | Print a line for each prune event |
-| `--triattention-no-protect-prefill` | off | Allow evicting prompt (prefill) tokens |
+| `--spec-type suffix` | — | Enable suffix-tree spec decoding |
+| `--spec-suffix-max-depth <n>` | `64` | Max trie depth |
+| `--spec-suffix-min-match-len <n>` | `5` | Minimum n-gram match length |
+| `--spec-suffix-n-max <n>` | `16` | Max draft tokens per step |
+| `--spec-suffix-p-min <f>` | `0.1` | Minimum acceptance probability |
+| `--spec-suffix-corpus <file>` | *(none)* | Optional corpus to seed the trie |
 
-### How it works
+### `llama-sweep-bench`
 
-1. When occupied KV cells exceed `budget + window` (SLACK mode), a prune is triggered
-2. The most recent `window` positions and all prefix/prompt tokens are protected
-3. For each sampled `(layer, head)` pair, key vectors are read from the KV cache, RoPE rotation is inverted, and a geometric offset score is computed on the GPU
-4. The top-`budget` tokens by importance score are kept; the rest are evicted
-5. Position gaps left by evicted tokens are harmless — RoPE handles non-contiguous positions natively
+Sweep PP/TG performance across rising `n_kv` at fixed `n_ubatch` to characterise inference throughput as the cache fills.
+
+```bash
+build/bin/llama-sweep-bench -m YourModel.gguf -ngl 99 -fa on \
+  -c 32768 -ub 512 -p 512
+```
+
+### `-sm graph` multi-GPU split mode
+
+Graph-level multi-GPU split with hooks for cross-GPU KV cache sync, hybrid CPU offload, and scheduler tuning under tensor overrides. Currently behaves equivalently to `-sm row` for weight splitting; KV-cache cross-GPU split is staged for the 2-GPU implementation phase (see `src/llama-split-graph.h`).
+
+```bash
+llama-server -m YourModel.gguf -ngl 99 \
+  -sm graph \
+  -smgs \
+  --max-gpus-split-mode-graph 0     # 0 = use all available
+```
+
+| Flag | Description |
+|------|-------------|
+| `-sm graph` / `--split-mode graph` | Use ik\_llama-style graph-level multi-GPU split |
+| `-smgs` / `--split-mode-graph-scheduling` | Force scheduling on even with tensor overrides |
+| `--max-gpus-split-mode-graph <n>` | Cap GPU count for graph-mode split (0 = all) |
 
 ---
 
@@ -214,8 +218,8 @@ cmake --build build --target llama-server -j$(nproc)
 
 | Branch | Description |
 |--------|-------------|
-| `feature/triattention` | **Default** — TurboQuant + TriAttention (latest) |
-| `feature/turboquant-kv-cache` | TurboQuant base (pre-TriAttention) |
+| `prism` | **Default** — Prism + TurboQuant + ik\_llama integrations |
+| `feature/turboquant-kv-cache` | TurboQuant base |
 | `master` | Upstream llama.cpp base |
 
 ---
@@ -224,8 +228,8 @@ cmake --build build --target llama-server -j$(nproc)
 
 - [llama.cpp](https://github.com/ggml-org/llama.cpp) — Georgi Gerganov and contributors
 - [TurboQuant](https://github.com/TheTom/llama-cpp-turboquant) — original TurboQuant fork
-- TriAttention algorithm — [arXiv 2604.04921](https://arxiv.org/abs/2604.04921)
-- GPU integration and KV cache implementation — [@atomicmilkshake](https://github.com/atomicmilkshake)
+- [ik\_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp) — suffix-tree spec decoding, `llama-sweep-bench`, `-sm graph` multi-GPU split mode (Iwan Kawrakow and contributors)
+- Suffix-tree decoding paper — Saxena et al., "SuffixDecoding: A Model-Free Approach to Speeding Up LLM Inference" ([arXiv:2411.04975](https://arxiv.org/abs/2411.04975))
 
 ---
 
