@@ -2161,6 +2161,15 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 // nop
             } break;
+        case GGML_OP_FAKE_CPY:
+            {
+                // ik_llama port: fake_cpy is a graph-orchestration alias; data sharing is handled
+                // by the backend scheduler. No CPU compute needed.
+            } break;
+        case GGML_OP_REDUCE:
+            {
+                ggml_compute_forward_reduce(params, tensor);
+            } break;
         case GGML_OP_COUNT:
             {
                 GGML_ABORT("fatal error");
@@ -2487,6 +2496,16 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_NONE:
             {
                 n_tasks = 1;
+            } break;
+        case GGML_OP_FAKE_CPY:
+            {
+                // ik_llama port: graph alias, no CPU work
+                n_tasks = 1;
+            } break;
+        case GGML_OP_REDUCE:
+            {
+                // ik_llama port: tensor-parallel result reduction. Multi-thread friendly.
+                n_tasks = n_threads;
             } break;
         case GGML_OP_COUNT:
             {

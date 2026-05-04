@@ -10751,6 +10751,60 @@ void ggml_compute_forward_turbo_wht(
     }
 }
 
+// ggml_compute_forward_reduce (ik_llama port: split-mode-graph result reduction)
+
+static void ggml_compute_forward_reduce_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const int   ith = params->ith;
+    const int   nth = params->nth;
+
+    const enum ggml_op op = (enum ggml_op) ggml_get_op_params_i32(dst, 0);
+    const int          n  = ggml_get_op_params_i32(dst, 1);
+    GGML_ASSERT(n >= 1 && n <= GGML_MAX_SRC);
+    GGML_ASSERT(op == GGML_OP_ADD || op == GGML_OP_MEAN);
+
+    const int64_t nelems = ggml_nelements(dst);
+    const int64_t per    = (nelems + nth - 1) / nth;
+    const int64_t first  = per * ith;
+    const int64_t last   = MIN(first + per, nelems);
+    if (first >= last) {
+        return;
+    }
+
+    float * d = (float *) dst->data;
+
+    // sum first source
+    {
+        const float * s = (const float *) dst->src[0]->data;
+        for (int64_t i = first; i < last; ++i) {
+            d[i] = s[i];
+        }
+    }
+    for (int k = 1; k < n; ++k) {
+        const float * s = (const float *) dst->src[k]->data;
+        for (int64_t i = first; i < last; ++i) {
+            d[i] += s[i];
+        }
+    }
+
+    if (op == GGML_OP_MEAN && n > 1) {
+        const float inv = 1.0f / (float) n;
+        for (int64_t i = first; i < last; ++i) {
+            d[i] *= inv;
+        }
+    }
+}
+
+void ggml_compute_forward_reduce(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    switch (dst->src[0]->type) {
+        case GGML_TYPE_F32: ggml_compute_forward_reduce_f32(params, dst); break;
+        default: GGML_ABORT("ggml_compute_forward_reduce: unsupported type %s", ggml_type_name(dst->src[0]->type));
+    }
+}
+
 // ggml_compute_forward_rwkv_wkv7
 
 static void ggml_compute_forward_rwkv_wkv7_f32(

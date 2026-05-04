@@ -1185,6 +1185,13 @@ struct ggml_cuda_pool_alloc {
 struct ggml_tensor_extra_gpu {
     void * data_device[GGML_CUDA_MAX_DEVICES]; // 1 pointer for each device for split tensors
     cudaEvent_t events[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS]; // events for synchronizing multiple GPUs
+
+    // ik_llama port (split-mode-graph): optional per-device sub-tensors for tensor-parallel
+    // operations. NULL when only legacy ROW-style data_device[] tracking is needed.
+    // When non-null, splits[id] is a ggml_tensor view with ne[1] = this device's slice.
+    ggml_tensor * splits[GGML_CUDA_MAX_DEVICES];
+    int           n_split_devices; // count of populated entries in splits[]
+    int           split_dim;       // dimension along which splits are taken (typically 1)
 };
 
 

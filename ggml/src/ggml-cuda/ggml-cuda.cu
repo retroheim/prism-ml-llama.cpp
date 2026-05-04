@@ -36,6 +36,7 @@
 #include "ggml-cuda/pad.cuh"
 #include "ggml-cuda/pool2d.cuh"
 #include "ggml-cuda/quantize.cuh"
+#include "ggml-cuda/reduce.cuh"
 #include "ggml-cuda/rope.cuh"
 #include "ggml-cuda/roll.cuh"
 #include "ggml-cuda/scale.cuh"
@@ -1018,38 +1019,57 @@ static enum ggml_status ggml_backend_cuda_split_buffer_init_tensor(ggml_backend_
     return GGML_STATUS_SUCCESS;
 }
 
-static void ggml_backend_cuda_split_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
-    // split tensors must always be set in their entirety at once
-    GGML_ASSERT(offset == 0);
-    GGML_ASSERT(size == ggml_nbytes(tensor));
+// ik_llama port (split-mode-graph): row-aligned partial-or-full I/O on a split buffer.
+// Direction: H2D when is_set=true, D2H when false.
+// Whole-tensor I/O (offset==0 && size==ggml_nbytes(tensor)) is the legacy fast path;
+// partial slices must be row-aligned (offset and size are multiples of nb[1]).
+// Used by Phase 3 KV-cache cross-GPU sync for session save/load.
+static void ggml_backend_cuda_split_buffer_io(
+        ggml_backend_buffer_t buffer, ggml_tensor * tensor, void * data, size_t offset, size_t size, bool is_set) {
     GGML_ASSERT(ggml_is_contiguous(tensor) && "split buffers only supported for contiguous tensors");
 
     ggml_backend_cuda_split_buffer_type_context * buft_ctx = (ggml_backend_cuda_split_buffer_type_context *)buffer->buft->context;
 
-    const int64_t ne0 = tensor->ne[0];
-    const size_t nb1 = tensor->nb[1];
+    const size_t  nb1   = tensor->nb[1];
+    const size_t  total = ggml_nbytes(tensor);
     ggml_tensor_extra_gpu * extra = (ggml_tensor_extra_gpu *)tensor->extra;
+
+    GGML_ASSERT(offset + size <= total);
+    GGML_ASSERT(nb1 > 0 && offset % nb1 == 0 && size % nb1 == 0 &&
+                "split buffer I/O must be row-aligned (offset and size multiples of nb[1])");
+
+    const int64_t first_row = (int64_t)(offset / nb1);
+    const int64_t io_rows   = (int64_t)(size   / nb1);
+    const int64_t last_row  = first_row + io_rows;  // exclusive
 
     for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
         int64_t row_low, row_high;
         get_row_split(&row_low, &row_high, tensor, buft_ctx->tensor_split, id);
 
-        int64_t nrows_split = row_high - row_low;
-        if (nrows_split == 0) {
+        if (row_high - row_low == 0) {
             continue;
         }
 
-        const size_t offset_split = row_low*nb1;
-        size_t size = ggml_nbytes_split(tensor, nrows_split);
-        const size_t original_size = size;
-
-        // pad last row to a multiple of 512 elements to avoid out-of-bounds memory accesses
-        if (ne0 % MATRIX_ROW_PADDING != 0) {
-            size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
+        const int64_t r_start = std::max(first_row, row_low);
+        const int64_t r_end   = std::min(last_row,  row_high);
+        if (r_start >= r_end) {
+            continue;
         }
 
-        const char * buf_host = (const char *)data + offset_split;
-        CUDA_CHECK(cudaMemcpyAsync(extra->data_device[id], buf_host, original_size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+        const size_t nrows_io     = (size_t)(r_end - r_start);
+        const size_t dev_byte_off = (size_t)(r_start - row_low)   * nb1;
+        const size_t host_byte_off = (size_t)(r_start - first_row) * nb1;
+        const size_t io_bytes     = nrows_io * nb1;
+
+        if (is_set) {
+            CUDA_CHECK(cudaMemcpyAsync((char *)extra->data_device[id] + dev_byte_off,
+                                       (const char *)data + host_byte_off, io_bytes,
+                                       cudaMemcpyHostToDevice, cudaStreamPerThread));
+        } else {
+            CUDA_CHECK(cudaMemcpyAsync((char *)data + host_byte_off,
+                                       (const char *)extra->data_device[id] + dev_byte_off, io_bytes,
+                                       cudaMemcpyDeviceToHost, cudaStreamPerThread));
+        }
     }
 
     for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
@@ -1057,43 +1077,12 @@ static void ggml_backend_cuda_split_buffer_set_tensor(ggml_backend_buffer_t buff
     }
 }
 
+static void ggml_backend_cuda_split_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+    ggml_backend_cuda_split_buffer_io(buffer, tensor, const_cast<void *>(data), offset, size, /*is_set=*/true);
+}
+
 static void ggml_backend_cuda_split_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
-    // split tensors must always be set in their entirety at once
-    GGML_ASSERT(offset == 0);
-    GGML_ASSERT(size == ggml_nbytes(tensor));
-    GGML_ASSERT(ggml_is_contiguous(tensor) && "split buffers only supported for contiguous tensors");
-
-    ggml_backend_cuda_split_buffer_type_context * buft_ctx = (ggml_backend_cuda_split_buffer_type_context *)buffer->buft->context;
-
-    const int64_t ne0 = tensor->ne[0];
-    const size_t nb1 = tensor->nb[1];
-    ggml_tensor_extra_gpu * extra = (ggml_tensor_extra_gpu *)tensor->extra;
-
-    for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
-        int64_t row_low, row_high;
-        get_row_split(&row_low, &row_high, tensor, buft_ctx->tensor_split, id);
-
-        int64_t nrows_split = row_high - row_low;
-        if (nrows_split == 0) {
-            continue;
-        }
-
-        const size_t offset_split = row_low*nb1;
-        size_t size = ggml_nbytes_split(tensor, nrows_split);
-        const size_t original_size = size;
-
-        // pad last row to a multiple of 512 elements to avoid out-of-bounds memory accesses
-        if (ne0 % MATRIX_ROW_PADDING != 0) {
-            size += ggml_row_size(tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
-        }
-
-        char * buf_host = (char *)data + offset_split;
-        CUDA_CHECK(cudaMemcpyAsync(buf_host, extra->data_device[id], original_size, cudaMemcpyDeviceToHost, cudaStreamPerThread));
-    }
-
-    for (int id = 0; id < ggml_backend_cuda_get_device_count(); ++id) {
-        CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
-    }
+    ggml_backend_cuda_split_buffer_io(buffer, const_cast<ggml_tensor *>(tensor), data, offset, size, /*is_set=*/false);
 }
 
 static void ggml_backend_cuda_split_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
@@ -3016,6 +3005,13 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             break;
         case GGML_OP_FILL:
             ggml_cuda_op_fill(ctx, dst);
+            break;
+        case GGML_OP_FAKE_CPY:
+            // ik_llama port (split-mode-graph): graph alias - the backend scheduler manages
+            // the dst<-src data sharing; no kernel needed.
+            break;
+        case GGML_OP_REDUCE:
+            ggml_cuda_op_reduce(ctx, dst);
             break;
         default:
             return false;
@@ -5211,6 +5207,10 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
                    op->src[0]->ne[0] % 64 == 0;  // head dim must be divisible by 64 (supports 64 and 128 WHT groups)
                    op->src[0]->ne[0] % 32 == 0;  // supports 32, 64, and 128 WHT groups
+        case GGML_OP_FAKE_CPY:
+            return true;
+        case GGML_OP_REDUCE:
+            return op->type == GGML_TYPE_F32;
         case GGML_OP_SSM_SCAN: {
             if (op->src[3]->ne[0] == 1) {
                 // Mamba2

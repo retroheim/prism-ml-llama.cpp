@@ -1135,9 +1135,12 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "OPT_STEP_SGD",
 
     "GLU",
+
+    "REDUCE",
+    "FAKE_CPY",
 };
 
-static_assert(GGML_OP_COUNT == 97, "GGML_OP_COUNT != 97");
+static_assert(GGML_OP_COUNT == 99, "GGML_OP_COUNT != 99");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1246,9 +1249,12 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "sgd(x)",
 
     "glu(x)",
+
+    "reduce(x_0..x_n-1, op)",
+    "fake_cpy(dst, src)",
 };
 
-static_assert(GGML_OP_COUNT == 97, "GGML_OP_COUNT != 97");
+static_assert(GGML_OP_COUNT == 99, "GGML_OP_COUNT != 99");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -3554,6 +3560,58 @@ struct ggml_tensor * ggml_cpy(
         struct ggml_tensor * a,
         struct ggml_tensor * b) {
     return ggml_cpy_impl(ctx, a, b);
+}
+
+// ik_llama port (split-mode-graph)
+struct ggml_tensor * ggml_fake_cpy(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * dst,
+        struct ggml_tensor  * src) {
+    GGML_ASSERT(ggml_nelements(src) == ggml_nelements(dst));
+
+    struct ggml_tensor * result = ggml_view_tensor(ctx, dst);
+    if (strlen(dst->name) > 0) {
+        ggml_format_name(result, "%s (fake_cpy of %s)", dst->name, src->name);
+    } else {
+        ggml_format_name(result, "%s (fake_cpy)", src->name);
+    }
+
+    result->op     = GGML_OP_FAKE_CPY;
+    result->src[0] = src;
+    result->src[1] = dst;
+
+    return result;
+}
+
+// ik_llama port (split-mode-graph): reduction across n same-shape tensors.
+// `op` must currently be GGML_OP_ADD or GGML_OP_MEAN. Backends realise the reduction
+// in their compute_forward dispatch.
+struct ggml_tensor * ggml_reduce(
+        struct ggml_context  * ctx,
+        struct ggml_tensor  ** a,
+        int                    n,
+        enum   ggml_op         op) {
+    GGML_ASSERT(n >= 1 && n <= GGML_MAX_SRC && "ggml_reduce: n must be within [1, GGML_MAX_SRC]");
+    GGML_ASSERT(op == GGML_OP_ADD || op == GGML_OP_MEAN);
+    GGML_ASSERT(a != NULL && a[0] != NULL);
+
+    for (int i = 1; i < n; ++i) {
+        GGML_ASSERT(a[i] != NULL);
+        GGML_ASSERT(ggml_are_same_shape(a[0], a[i]));
+        GGML_ASSERT(a[0]->type == a[i]->type);
+    }
+
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a[0]);
+    ggml_format_name(result, "reduce(%s,...)", a[0]->name);
+
+    result->op = GGML_OP_REDUCE;
+    ggml_set_op_params_i32(result, 0, (int32_t) op);
+    ggml_set_op_params_i32(result, 1, n);
+    for (int i = 0; i < n; ++i) {
+        result->src[i] = a[i];
+    }
+
+    return result;
 }
 
 struct ggml_tensor * ggml_cast(

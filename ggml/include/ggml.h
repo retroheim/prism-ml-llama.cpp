@@ -587,6 +587,9 @@ extern "C" {
 
         GGML_OP_GLU,
 
+        GGML_OP_REDUCE,    // ik_llama port: multi-tensor reduction (sum/mean) for tensor-parallel split-mode-graph
+        GGML_OP_FAKE_CPY,  // ik_llama port: graph orchestration helper - aliases dst as src without copy
+
         GGML_OP_COUNT,
     };
 
@@ -1525,6 +1528,23 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
+
+    // ik_llama port (split-mode-graph): alias dst as a logical copy of src without doing the copy.
+    // Used to splice per-device subgraphs back into a unified graph; the backend treats dst's data
+    // pointer as already valid post-execution. Result shape and type are taken from `dst`.
+    GGML_API struct ggml_tensor * ggml_fake_cpy(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * dst,
+            struct ggml_tensor  * src);
+
+    // ik_llama port (split-mode-graph): n-ary reduction. Combines `n` source tensors of identical
+    // shape via the reduction op `op` (currently GGML_OP_ADD or GGML_OP_MEAN). Used at the output
+    // of tensor-parallel attention to gather per-device partial results.
+    GGML_API struct ggml_tensor * ggml_reduce(
+            struct ggml_context  * ctx,
+            struct ggml_tensor  ** a,
+            int                    n,
+            enum ggml_op           op);
 
     // note: casting from f32 to i32 will discard the fractional part
     GGML_API struct ggml_tensor * ggml_cast(
@@ -2811,6 +2831,18 @@ extern "C" {
     };
 
     GGML_API const struct ggml_type_traits * ggml_get_type_traits(enum ggml_type type);
+
+    // ik_llama port (split-mode-graph): tensor-parallel split tensor metadata.
+    // Carries per-device sub-tensors that share storage with a logical "combined" tensor.
+    // Each splits[i] is a view-shaped ggml_tensor whose ne[split_dim] is this device's slice
+    // along split_dim of the original tensor's ne[split_dim]. n_device counts populated entries
+    // in splits[]; entries may be NULL for devices that hold no slice.
+    typedef struct ggml_split_tensor {
+        int                  n_device;
+        int                  split_dim;
+        struct ggml_tensor * tensor;     // logical combined tensor (or NULL when only sub-tensors are needed)
+        struct ggml_tensor ** splits;    // length n_device, may contain NULL entries
+    } ggml_split_tensor_t;
 
     // ggml threadpool
     // TODO: currently, only a few functions are in the base ggml API, while the rest are in the CPU backend
