@@ -4,6 +4,7 @@
 #include "llama-graph.h"
 #include "llama-kv-cells.h"
 #include "llama-memory.h"
+#include "llama-split-tensor.h"
 
 #include <unordered_map>
 #include <vector>
@@ -278,6 +279,12 @@ private:
     stream_copy_info sc_info;
 
     std::vector<kv_layer> layers;
+
+    // ik_llama port (split-mode-graph): per-layer KV cache split-tensor wrappers.
+    // Populated by KV cache init when split_mode == GRAPH and the corresponding wk/wv
+    // weight already has split metadata. Empty otherwise. One entry per layer index.
+    std::vector<llama_split_tensor> split_k_l;
+    std::vector<llama_split_tensor> split_v_l;
 
     // TurboQuant rotation matrices (128x128, row-major stored)
     ggml_tensor * turbo_rotation = nullptr;      // R (forward rotation)

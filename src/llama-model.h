@@ -5,6 +5,7 @@
 #include "llama-graph.h"
 #include "llama-hparams.h"
 #include "llama-memory.h"
+#include "llama-split-tensor.h"
 #include "llama-vocab.h"
 
 #include <map>
@@ -494,6 +495,25 @@ struct llama_layer {
     struct llama_layer_shortconv shortconv;
 
     struct llama_layer_nextn nextn;
+
+    // ik_llama port (split-mode-graph): per-weight split-tensor wrappers.
+    // Populated by the model loader's split-mode-graph post-pass when split_mode == GRAPH.
+    // Each wrapper owns the embedded ggml_split_tensor_t that the corresponding weight's
+    // tensor->extra points to. NULL ptrs are unused; struct members are non-pointer to
+    // keep ABI/codegen simple — they are zero-initialised.
+    struct llama_split_tensor split_wq;
+    struct llama_split_tensor split_wk;
+    struct llama_split_tensor split_wv;
+    struct llama_split_tensor split_wo;
+    struct llama_split_tensor split_bq;
+    struct llama_split_tensor split_bk;
+    struct llama_split_tensor split_bv;
+    struct llama_split_tensor split_bo;
+    struct llama_split_tensor split_ffn_gate;
+    struct llama_split_tensor split_ffn_up;
+    struct llama_split_tensor split_ffn_down;
+    struct llama_split_tensor split_q_norm;
+    struct llama_split_tensor split_k_norm;
 };
 
 struct llama_device {
@@ -625,6 +645,14 @@ struct llama_model {
 
     // TODO: move this to new llm_arch_model_i interface
     ggml_cgraph * build_graph(const llm_graph_params & params) const;
+
+    // ik_llama port (split-mode-graph): registry of tensors whose tensor->extra has been
+    // populated as a ggml_split_tensor_t by the model loader's split-mode-graph post-pass.
+    // Used by session save/load I/O to discriminate split tensors from regular CUDA tensors
+    // (which carry ggml_tensor_extra_gpu via the same extra slot). Empty when split mode
+    // is not GRAPH or when the post-pass hasn't run.
+    void register_split_graph_tensor(const struct ggml_tensor * t) const;
+    bool is_split_graph_tensor(const struct ggml_tensor * t) const;
 
 private:
     llama_model_params params;
