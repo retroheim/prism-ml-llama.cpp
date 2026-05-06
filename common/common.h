@@ -467,6 +467,9 @@ struct common_params {
     bool    split_mode_graph_scheduling = false; // -smgs: force sm graph scheduling even with tensor overrides
     int32_t n_gpus_max_split_mode_graph = 0;     // 0 = use all available GPUs
 
+    // ik_llama port: merge Q,K,V tensors into one contiguous tensor (-mqkv)
+    bool    merge_qkv = false;
+
     common_cpu_params cpuparams;
     common_cpu_params cpuparams_batch;
 

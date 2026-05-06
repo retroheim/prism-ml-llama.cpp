@@ -1463,6 +1463,7 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.main_gpu                  = params.main_gpu;
     mparams.split_mode                = params.split_mode;
     mparams.n_gpus_max_split_mode_graph = params.n_gpus_max_split_mode_graph;
+    mparams.merge_qkv                 = params.merge_qkv;
     mparams.tensor_split              = params.tensor_split;
     mparams.use_mmap        = params.use_mmap;
     mparams.use_direct_io   = params.use_direct_io;

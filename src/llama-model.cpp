@@ -3012,6 +3012,12 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
     LLAMA_LOG_INFO("%s: loading model tensors, this can take a while... (mmap = %s, direct_io = %s)\n",
         __func__, ml.use_mmap ? "true" : "false", ml.use_direct_io ? "true" : "false");
 
+    if (params.merge_qkv) {
+        LLAMA_LOG_WARN("%s: -mqkv requested but runtime QKV merge is not yet implemented (foundation only); "
+                       "the flag is plumbed end-to-end but no model loader path consumes it yet — "
+                       "tensors will load as separate Q,K,V\n", __func__);
+    }
+
     // build a list of buffer types for the CPU and GPU devices
     pimpl->cpu_buft_list = make_cpu_buft_list(devices, params.use_extra_bufts, params.no_host);
     for (const auto & dev : devices) {
@@ -9144,6 +9150,7 @@ llama_model_params llama_model_default_params() {
         /*.use_extra_bufts             =*/ true,
         /*.no_host                     =*/ false,
         /*.no_alloc                    =*/ false,
+        /*.merge_qkv                   =*/ false,
         /*.n_gpus_max_split_mode_graph =*/ 0,
     };
 

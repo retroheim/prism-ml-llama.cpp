@@ -324,6 +324,7 @@ extern "C" {
         bool use_extra_bufts; // use extra buffer types (used for weight repacking)
         bool no_host;         // bypass host buffer allowing extra buffers to be used
         bool no_alloc;        // only load metadata and simulate memory allocations
+        bool merge_qkv;       // ik_llama port: merge Q,K,V projections into a single contiguous tensor (-mqkv)
 
         // ik_llama port: max GPUs to use in LLAMA_SPLIT_MODE_GRAPH (0 = use all)
         int32_t n_gpus_max_split_mode_graph;

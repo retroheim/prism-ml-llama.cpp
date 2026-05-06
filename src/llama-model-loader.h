@@ -184,6 +184,12 @@ struct llama_model_loader {
 
     struct ggml_tensor * create_tensor_as_view(struct ggml_context * ctx, struct ggml_tensor * base, const std::string & name, const std::initializer_list<int64_t> & ne, size_t offset, bool required = true);
 
+    // ik_llama port (-mqkv): TODO — runtime merge of Q/K/V into a contiguous wqkv container.
+    // Foundation (CLI flag, params plumbing) is in place; implementation requires mirroring
+    // create_tensor's buft selection logic to allocate the merged container in the right
+    // ctx_map entry, then registering Q/K/V as views via create_tensor_as_view. Deferred
+    // pending CUDA build validation since perf gain is GPU-side (fewer mat_mul calls).
+
     void done_getting_tensors() const;
 
     void init_mappings(bool prefetch = true, llama_mlocks * mlock_mmaps = nullptr);
