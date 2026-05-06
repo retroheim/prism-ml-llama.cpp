@@ -7941,6 +7941,24 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         }
     }
 
+    // ik_llama port (split-mode-graph): per-arch post-load pass that prepares per-device
+    // sub-tensors for tensor-parallel attention. Currently a guarded no-op (early-returns
+    // unless split_mode == GRAPH and n_devices >= 2). Per-arch dispatch will land arch-by-arch
+    // against dual-GPU validation; until then, the I/O dispatch wired in llama-context.cpp
+    // sees an empty registry and behaviour matches ROW mode.
+    {
+        ggml_context * ctx_for_split = nullptr;
+        // Pick any non-empty ctx; the post-pass currently does not allocate sub-tensors so
+        // the choice is not load-bearing yet.
+        for (auto & [buft, ctx_ptr] : ml.ctx_map) {
+            if (ggml_get_first_tensor(ctx_ptr.get()) != nullptr) {
+                ctx_for_split = ctx_ptr.get();
+                break;
+            }
+        }
+        llama_split_graph_post_load_pass(*this, params, ctx_for_split);
+    }
+
     ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
     pimpl->mappings.reserve(ml.mappings.size());
 

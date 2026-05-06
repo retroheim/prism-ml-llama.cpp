@@ -1,6 +1,7 @@
 #include "llama-split-tensor.h"
 
 #include "llama-impl.h"
+#include "llama-model.h"
 
 #include <cmath>
 #include <cstdio>
@@ -163,4 +164,59 @@ std::vector<int> llama_create_split_plan(
         r *= granularity;
     }
     return result;
+}
+
+// ik_llama port (split-mode-graph): post-load pass.
+//
+// Hooked from llama_model::load_tensors after done_getting_tensors() and before backend
+// buffer allocation. Walks per-layer weights and (per arch) calls
+// llama_prepare_split_tensors + model.register_split_graph_tensor.
+//
+// Today this is a guarded no-op:
+//   - LLAMA_SPLIT_MODE_GRAPH is an explicit user opt-in
+//   - n_devices > 1 prevents single-GPU configurations from going through the GRAPH path
+//   - per-arch implementations are stubbed; expand them as each arch is brought online
+//     with dual-GPU validation.
+//
+// The empty body is intentional: it makes the integration point explicit and lets the I/O
+// dispatch (already wired in llama-context.cpp) remain dormant until per-arch surgery
+// lands. No tensor is registered, so model.is_split_graph_tensor returns false everywhere
+// and behaviour matches ROW mode.
+void llama_split_graph_post_load_pass(
+        llama_model &              model,
+        const llama_model_params & params,
+        ggml_context *             ctx_split) {
+    if (params.split_mode != LLAMA_SPLIT_MODE_GRAPH) {
+        return;
+    }
+
+    // Multi-GPU gate: count populated devices in params (NULL-terminated).
+    int n_devices = 0;
+    if (params.devices) {
+        while (params.devices[n_devices]) {
+            ++n_devices;
+        }
+    }
+    if (n_devices < 2) {
+        // Single-GPU GRAPH mode falls back to ROW behaviour with the existing CUDA split
+        // buffer; nothing to do here.
+        return;
+    }
+
+    GGML_UNUSED(ctx_split);
+    GGML_UNUSED(model);
+
+    LLAMA_LOG_INFO("%s: split-mode-graph post-load pass active for %d devices, but per-arch population is not yet implemented; falling back to ROW-equivalent behaviour\n",
+                   __func__, n_devices);
+
+    // Per-arch dispatch goes here, e.g.:
+    //   switch (model.arch) {
+    //       case LLM_ARCH_LLAMA:
+    //           split_graph_prepare_llama(model, n_devices, ctx_split);
+    //           break;
+    //       case LLM_ARCH_QWEN35:
+    //           split_graph_prepare_qwen35(model, n_devices, ctx_split);
+    //           break;
+    //       ...
+    //   }
 }

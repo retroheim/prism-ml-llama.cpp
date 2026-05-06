@@ -64,3 +64,24 @@ std::vector<int> llama_create_split_plan(
         const std::vector<float> &     splits,
         const std::vector<size_t> &    mem_used,
         bool                           verbose = false);
+
+// Forward declaration — defined in llama-model.h.
+struct llama_model;
+struct llama_model_params;
+
+// ik_llama port (split-mode-graph): post-load pass that consumes per-layer weight tensors
+// and (when split_mode == LLAMA_SPLIT_MODE_GRAPH and multi-GPU) prepares the per-device
+// sub-tensors. Must be called between ml.done_getting_tensors() and backend buffer
+// allocation in llama_model::load_tensors.
+//
+// On exit, every layer weight that was processed has:
+//   - its tensor->extra set to a ggml_split_tensor_t pointer (owned by llama_layer)
+//   - itself registered in model's split_graph_tensors set
+//
+// Today the implementation early-returns on any split mode other than GRAPH and on
+// single-GPU configurations. Per-arch dispatch is stubbed; expand it in
+// llama-split-tensor.cpp as each architecture is brought online with dual-GPU testing.
+void llama_split_graph_post_load_pass(
+        struct llama_model &              model,
+        const struct llama_model_params & params,
+        struct ggml_context *             ctx_split);
