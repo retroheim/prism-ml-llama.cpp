@@ -359,6 +359,62 @@ llama_kv_cache::llama_kv_cache(
         has_k && ggml_format_name(k, "cache_k_l%d", il);
         has_v && ggml_format_name(v, "cache_v_l%d", il);
 
+        // ik_llama port (split-mode-graph): when GRAPH mode is active and the corresponding
+        // wk/wv weights carry split metadata (populated by llama_split_graph_post_load_pass),
+        // also split the per-layer KV cache tensors along the head dimension. Each device's
+        // KV slice mirrors its wk/wv slice's ne[1] (n_embd_k_gqa share). Direct port of ik's
+        // split_cache branch in llama_kv_cache_init (src/llama.cpp:980-1050).
+        if (model.split_mode() == LLAMA_SPLIT_MODE_GRAPH && offload && (has_k || has_v) &&
+            (size_t) il < model.layers.size()) {
+            const auto & layer = model.layers[il];
+            auto * extra_K = layer.split_wk.ggml.n_device > 0 ? &layer.split_wk : nullptr;
+            auto * extra_V = layer.split_wv.ggml.n_device > 0 ? &layer.split_wv : nullptr;
+
+            if (extra_K && has_k) {
+                auto & split_k_l = split_k_l_ensure(il);
+                const int n_dev = extra_K->ggml.n_device;
+                split_k_l.tensor_splits.assign(n_dev, nullptr);
+                for (int id = 0; id < n_dev; ++id) {
+                    ggml_tensor * wk_split = extra_K->tensor_splits[id];
+                    if (!wk_split) continue;
+                    // Per-device K cache: ne[0] = this device's head-dim slice (= wk_split->ne[1]),
+                    // ne[1] = kv_size, ne[2] = n_stream.
+                    split_k_l.tensor_splits[id] = ggml_new_tensor_3d(ctx, layer_type_k,
+                                                                    wk_split->ne[1], kv_size, n_stream);
+                    char name[GGML_MAX_NAME];
+                    snprintf(name, sizeof(name), "cache_k_l%d.%d", il, id);
+                    ggml_set_name(split_k_l.tensor_splits[id], name);
+                }
+                split_k_l.ggml.n_device  = n_dev;
+                split_k_l.ggml.split_dim = 0;
+                split_k_l.ggml.tensor    = k;
+                split_k_l.ggml.splits    = split_k_l.tensor_splits.data();
+                k->extra = (void *) &split_k_l.ggml;
+                model.register_split_graph_tensor(k);
+            }
+
+            if (extra_V && has_v) {
+                auto & split_v_l = split_v_l_ensure(il);
+                const int n_dev = extra_V->ggml.n_device;
+                split_v_l.tensor_splits.assign(n_dev, nullptr);
+                for (int id = 0; id < n_dev; ++id) {
+                    ggml_tensor * wv_split = extra_V->tensor_splits[id];
+                    if (!wv_split) continue;
+                    split_v_l.tensor_splits[id] = ggml_new_tensor_3d(ctx, layer_type_v,
+                                                                    wv_split->ne[1], kv_size, n_stream);
+                    char name[GGML_MAX_NAME];
+                    snprintf(name, sizeof(name), "cache_v_l%d.%d", il, id);
+                    ggml_set_name(split_v_l.tensor_splits[id], name);
+                }
+                split_v_l.ggml.n_device  = n_dev;
+                split_v_l.ggml.split_dim = 0;
+                split_v_l.ggml.tensor    = v;
+                split_v_l.ggml.splits    = split_v_l.tensor_splits.data();
+                v->extra = (void *) &split_v_l.ggml;
+                model.register_split_graph_tensor(v);
+            }
+        }
+
         std::vector<ggml_tensor *> k_stream;
         std::vector<ggml_tensor *> v_stream;
 

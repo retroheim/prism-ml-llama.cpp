@@ -282,9 +282,20 @@ private:
 
     // ik_llama port (split-mode-graph): per-layer KV cache split-tensor wrappers.
     // Populated by KV cache init when split_mode == GRAPH and the corresponding wk/wv
-    // weight already has split metadata. Empty otherwise. One entry per layer index.
+    // weight already has split metadata. Empty otherwise. Indexed by layer index `il`.
     std::vector<llama_split_tensor> split_k_l;
     std::vector<llama_split_tensor> split_v_l;
+
+    // Ensure split_k_l[il] / split_v_l[il] exist (resize underlying vector as needed)
+    // and return a stable reference.
+    llama_split_tensor & split_k_l_ensure(int il) {
+        if ((int) split_k_l.size() <= il) split_k_l.resize(il + 1);
+        return split_k_l[il];
+    }
+    llama_split_tensor & split_v_l_ensure(int il) {
+        if ((int) split_v_l.size() <= il) split_v_l.resize(il + 1);
+        return split_v_l[il];
+    }
 
     // TurboQuant rotation matrices (128x128, row-major stored)
     ggml_tensor * turbo_rotation = nullptr;      // R (forward rotation)
