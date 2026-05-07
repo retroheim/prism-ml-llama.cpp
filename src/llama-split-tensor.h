@@ -68,6 +68,7 @@ std::vector<int> llama_create_split_plan(
 // Forward declaration — defined in llama-model.h.
 struct llama_model;
 struct llama_model_params;
+class llama_model_loader;
 
 // ik_llama port (split-mode-graph): post-load pass that consumes per-layer weight tensors
 // and (when split_mode == LLAMA_SPLIT_MODE_GRAPH and multi-GPU) prepares the per-device
@@ -79,8 +80,9 @@ struct llama_model_params;
 //   - itself registered in model's split_graph_tensors set
 //
 // Today the implementation early-returns on any split mode other than GRAPH and on
-// single-GPU configurations. Per-arch dispatch is stubbed; expand it in
-// llama-split-tensor.cpp as each architecture is brought online with dual-GPU testing.
+// single-GPU configurations. Per-arch dispatch is implemented for LLM_ARCH_LLAMA-class
+// architectures (LLaMA, Granite, Mistral, etc. that use centralised create_tensor_qkv);
+// other archs fall through to no-op until brought online.
 void llama_split_graph_post_load_pass(
         struct llama_model &              model,
         const struct llama_model_params & params,
