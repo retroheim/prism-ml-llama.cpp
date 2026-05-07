@@ -180,10 +180,14 @@ std::vector<int> llama_create_split_plan(
 //   - per-arch implementations are stubbed; expand them as each arch is brought online
 //     with dual-GPU validation.
 //
-// LLaMA-class arch handler. Direct port of the relevant section of ik_llama's
-// llm_load_tensors split pass (src/llama-load-tensors.cpp:4150+). Splits attn_norm (replicated),
-// wq/wk/wv (column-split along ne[1] using KQ/VO granularity), wo (row-split along ne[0]).
-// FFN tensors are intentionally left unsplit until tensor-parallel FFN is brought online.
+// Direct port of ik_llama's per-layer LLaMA-class split logic (src/llama-load-tensors.cpp:4150+).
+// `qwen_family` adjusts granularity_kq for Qwen3.x archs that have fused gate/QKV layouts:
+// they pack two heads' worth into a single ne[1] slice, so the granularity in elements is
+// 2 × n_embd_head_k × gqa_ratio.
+//
+// Splits attn_norm (replicated), wq/wk/wv (column-split along ne[1] using KQ/VO granularity),
+// wo (row-split along ne[0]). FFN tensors are intentionally left unsplit until
+// tensor-parallel FFN is brought online.
 //
 // The split-tensor wrappers live on llama_layer (split_w[qkvo]/split_*_norm fields) so that
 // the embedded ggml_split_tensor_t outlives the post-pass and remains valid for the lifetime
@@ -192,7 +196,8 @@ static void llama_split_graph_prepare_llama_class(
         llama_model &           model,
         ggml_context *          ctx,
         std::vector<float> &    cur_splits,
-        std::vector<size_t> &   mem_used) {
+        std::vector<size_t> &   mem_used,
+        bool                    qwen_family = false) {
     const llama_hparams & hparams = model.hparams;
     const int n_layer = hparams.n_layer;
 
@@ -212,11 +217,19 @@ static void llama_split_graph_prepare_llama_class(
         const int gqa_ratio        = (int) (hparams.n_head(il) / hparams.n_head_kv(il));
         const int n_embd_head_k    = (int) hparams.n_embd_head_k(il);
         const int n_embd_head_v    = (int) hparams.n_embd_head_v(il);
-        const int granularity_kq   = n_embd_head_k * gqa_ratio;
+        int granularity_kq         = n_embd_head_k * gqa_ratio;
         const int granularity_vo   = n_embd_head_v * gqa_ratio;
 
+        // Qwen3.x family packs two heads per ne[1] slice; double the KQ granularity
+        // and scale the layer's effective wq->ne[1] accordingly (matches ik).
+        int wq_ne1 = (int) layer.wq->ne[1];
+        if (qwen_family) {
+            granularity_kq *= 2;
+            wq_ne1 /= 2;
+        }
+
         // Split plans for the layer's KV-output and Q-key directions.
-        std::vector<int> split_kq = llama_create_split_plan((int) layer.wq->ne[1], granularity_kq, cur_splits, mem_used);
+        std::vector<int> split_kq = llama_create_split_plan(wq_ne1, granularity_kq, cur_splits, mem_used);
         std::vector<int> split_vo = llama_create_split_plan((int) layer.wo->ne[0], granularity_vo, cur_splits, mem_used);
 
         // attn_norm replicated on every device.
@@ -319,7 +332,14 @@ void llama_split_graph_post_load_pass(
         case LLM_ARCH_GRANITE_MOE:
         case LLM_ARCH_MISTRAL3:
         case LLM_ARCH_LLAMA_EMBED:
-            llama_split_graph_prepare_llama_class(model, ctx_split, cur_splits, mem_used);
+            llama_split_graph_prepare_llama_class(model, ctx_split, cur_splits, mem_used, /*qwen_family=*/false);
+            break;
+        case LLM_ARCH_QWEN3:
+        case LLM_ARCH_QWEN3MOE:
+        case LLM_ARCH_QWEN35:
+        case LLM_ARCH_QWEN35MOE:
+            // Qwen3.x family: paired-head wq layout, granularity_kq × 2.
+            llama_split_graph_prepare_llama_class(model, ctx_split, cur_splits, mem_used, /*qwen_family=*/true);
             break;
         default:
             LLAMA_LOG_INFO("%s: arch %s has no split-mode-graph handler; falling back to ROW-equivalent behaviour\n",
