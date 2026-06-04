@@ -8,6 +8,9 @@
 #include "llama-cparams.h"
 #include "llama-model-loader.h"
 
+#include "llama-split-graph.h"
+#include "llama-split-tensor.h"
+
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
 #include "llama-kv-cache-dsa.h"
@@ -909,12 +912,13 @@ static buft_list_t make_cpu_buft_list(const std::vector<llama_device> & devices,
     return buft_list;
 }
 
-// GPU: split if LLAMA_SPLIT_MODE_ROW -> GPU
+// GPU: split if LLAMA_SPLIT_MODE_ROW or LLAMA_SPLIT_MODE_GRAPH -> GPU
 static buft_list_t make_gpu_buft_list(ggml_backend_dev_t dev, llama_split_mode split_mode, const float * tensor_split) {
     buft_list_t buft_list;
 
     // add the device split buffer type if requested and available
-    if (split_mode == LLAMA_SPLIT_MODE_ROW) {
+    // (ik_llama port: graph mode reuses ROW's split buffer path)
+    if (llama_split_graph::wants_split_buffer(split_mode)) {
         ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
         auto ggml_backend_split_buffer_type_fn = (ggml_backend_split_buffer_type_t)
             ggml_backend_reg_get_proc_address(reg, "ggml_backend_split_buffer_type");
@@ -1463,6 +1467,21 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         for (auto * cur = ggml_get_first_tensor(ctx_ptr.get()); cur != NULL; cur = ggml_get_next_tensor(ctx_ptr.get(), cur)) {
             tensors_by_name.emplace_back(ggml_get_name(cur), cur);
         }
+    }
+
+    // ik_llama port (split-mode-graph): post-load pass populates per-weight
+    // split-tensor wrappers + the model's split-graph tensor registry. No-op
+    // unless split_mode == GRAPH. Must run after tensors are created but before
+    // backend buffers are allocated.
+    {
+        ggml_context * ctx_for_split = nullptr;
+        for (auto & [buft, ctx_ptr] : ml.ctx_map) {
+            if (ggml_get_first_tensor(ctx_ptr.get()) != nullptr) {
+                ctx_for_split = ctx_ptr.get();
+                break;
+            }
+        }
+        llama_split_graph_post_load_pass(*this, params, ctx_for_split);
     }
 
     ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
