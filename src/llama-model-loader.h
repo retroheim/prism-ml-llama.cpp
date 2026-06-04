@@ -184,32 +184,7 @@ struct llama_model_loader {
 
     struct ggml_tensor * create_tensor_as_view(struct ggml_context * ctx, struct ggml_tensor * base, const std::string & name, const std::initializer_list<int64_t> & ne, size_t offset, bool required = true);
 
-    // ik_llama port (-mqkv): runtime merge of Q/K/V into a contiguous wqkv container.
-    //
-    // Looks up Q/K/V tensor metadata by gguf name. If all three exist with the same dtype,
-    // selects a buft from `buft_list_layer` (using the same logic as create_tensor) and
-    // allocates a combined wqkv tensor of shape {n_embd_, q_ne + k_ne + v_ne} in that
-    // buft's ctx. Q, K, V are then created as views into wqkv via create_tensor_as_view
-    // so the existing data-load path fills each from its gguf entry.
-    //
-    // Returns true on success: *out_qkv is the container, *out_q/*out_k/*out_v are views.
-    // Returns false on missing metadata, dtype mismatch, or override conflicts — caller
-    // should fall back to creating Q/K/V separately.
-    bool create_merged_qkv(
-            const llama_hparams & hparams,
-            const buft_list_t *   buft_list_cpu,
-            const buft_list_t *   buft_list_layer,
-            int                   bid,
-            int64_t               n_embd_,
-            int64_t               q_ne,
-            int64_t               k_ne,
-            int64_t               v_ne,
-            struct ggml_tensor ** out_qkv,
-            struct ggml_tensor ** out_q,
-            struct ggml_tensor ** out_k,
-            struct ggml_tensor ** out_v);
-
-    void done_getting_tensors() const;
+    void done_getting_tensors(bool partial = false) const;
 
     void init_mappings(bool prefetch = true, llama_mlocks * mlock_mmaps = nullptr);
 

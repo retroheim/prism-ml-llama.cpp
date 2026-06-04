@@ -37,8 +37,6 @@ static std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_F16:      return "F16";
         case LLAMA_FTYPE_MOSTLY_BF16:     return "BF16";
         case LLAMA_FTYPE_MOSTLY_Q1_0:     return "Q1_0";
-        case LLAMA_FTYPE_MOSTLY_Q1_0_g128: return "Q1_0_g128";
-        case LLAMA_FTYPE_MOSTLY_Q2_0:     return "Q2_0";
         case LLAMA_FTYPE_MOSTLY_Q4_0:     return "Q4_0";
         case LLAMA_FTYPE_MOSTLY_Q4_1:     return "Q4_1";
         case LLAMA_FTYPE_MOSTLY_Q5_0:     return "Q5_0";
@@ -58,8 +56,6 @@ static std::string llama_model_ftype_name(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_Q6_K:     return "Q6_K";
         case LLAMA_FTYPE_MOSTLY_TQ1_0:    return "TQ1_0 - 1.69 bpw ternary";
         case LLAMA_FTYPE_MOSTLY_TQ2_0:    return "TQ2_0 - 2.06 bpw ternary";
-        case LLAMA_FTYPE_MOSTLY_TQ3_1S:   return "TQ3_1S - 4.0 bpw WHT-rotated 3-bit";
-        case LLAMA_FTYPE_MOSTLY_TQ4_1S:   return "TQ4_1S - 5.0 bpw WHT-rotated 4-bit";
         case LLAMA_FTYPE_MOSTLY_IQ2_XXS:  return "IQ2_XXS - 2.0625 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ2_XS:   return "IQ2_XS - 2.3125 bpw";
         case LLAMA_FTYPE_MOSTLY_IQ2_S:    return "IQ2_S - 2.5 bpw";
@@ -150,7 +146,7 @@ namespace GGUFMeta {
             const enum gguf_type arr_type = gguf_get_arr_type(ctx, k);
             return ArrayInfo {
                 arr_type,
-                size_t(gguf_get_arr_n(ctx, k)),
+                gguf_get_arr_n(ctx, k),
                 arr_type == GGUF_TYPE_STRING ? nullptr : gguf_get_arr_data(ctx, k),
             };
         }
@@ -449,7 +445,7 @@ namespace GGUFMeta {
         }
 
         if (n > N_MAX) {
-            throw std::runtime_error(format("n > N_MAX: %u > %u for key %s", (uint32_t) n, (uint32_t) N_MAX, key.c_str()));
+            throw std::runtime_error(format("n > N_MAX: %u > %u for key %s", n, (uint32_t) N_MAX, key.c_str()));
         }
 
         if (gguf_get_kv_type(metadata, kid) == GGUF_TYPE_ARRAY) {
@@ -506,9 +502,9 @@ namespace GGUFMeta {
     }
 
     // TODO: this is not very clever - figure out something better
-    template bool llama_model_loader::get_key_or_arr<std::array<int, 4>>(enum llm_kv kid, std::array<int, 4> & result, uint32_t n, bool required);
+    template bool llama_model_loader::get_key_or_arr<std::array<int,      4>>  (enum llm_kv kid, std::array<int,      4>   & result, uint32_t n, bool required);
     template bool llama_model_loader::get_key_or_arr<std::array<uint32_t, 512>>(enum llm_kv kid, std::array<uint32_t, 512> & result, uint32_t n, bool required);
-    template bool llama_model_loader::get_key_or_arr<std::array<float, 512>>(enum llm_kv kid, std::array<float, 512> & result, uint32_t n, bool required);
+    template bool llama_model_loader::get_key_or_arr<std::array<float,    512>>(enum llm_kv kid, std::array<float,    512> & result, uint32_t n, bool required);
 
 
 llama_model_loader::llama_model_loader(
@@ -753,8 +749,6 @@ llama_model_loader::llama_model_loader(
             case GGML_TYPE_Q6_K:    ftype = LLAMA_FTYPE_MOSTLY_Q6_K;    break;
             case GGML_TYPE_TQ1_0:   ftype = LLAMA_FTYPE_MOSTLY_TQ1_0;   break;
             case GGML_TYPE_TQ2_0:   ftype = LLAMA_FTYPE_MOSTLY_TQ2_0;   break;
-            case GGML_TYPE_TQ3_1S:  ftype = LLAMA_FTYPE_MOSTLY_TQ3_1S;  break;
-            case GGML_TYPE_TQ4_1S:  ftype = LLAMA_FTYPE_MOSTLY_TQ4_1S;  break;
             case GGML_TYPE_IQ2_XXS: ftype = LLAMA_FTYPE_MOSTLY_IQ2_XXS; break;
             case GGML_TYPE_IQ2_XS:  ftype = LLAMA_FTYPE_MOSTLY_IQ2_XS;  break;
             case GGML_TYPE_IQ2_S:   ftype = LLAMA_FTYPE_MOSTLY_IQ2_S;   break;
@@ -766,8 +760,6 @@ llama_model_loader::llama_model_loader(
             case GGML_TYPE_IQ3_S:   ftype = LLAMA_FTYPE_MOSTLY_IQ3_S;   break;
             case GGML_TYPE_NVFP4:   ftype = LLAMA_FTYPE_MOSTLY_NVFP4;   break;
             case GGML_TYPE_Q1_0:    ftype = LLAMA_FTYPE_MOSTLY_Q1_0;    break;
-            case GGML_TYPE_Q1_0_g128: ftype = LLAMA_FTYPE_MOSTLY_Q1_0_g128; break;
-            case GGML_TYPE_Q2_0:    ftype = LLAMA_FTYPE_MOSTLY_Q2_0;    break;
             default:
                 {
                     LLAMA_LOG_WARN("%s: unknown type %s\n", __func__, ggml_type_name(type_max));
@@ -1320,149 +1312,16 @@ struct ggml_tensor * llama_model_loader::create_tensor_as_view(struct ggml_conte
     return tensor;
 }
 
-// ik_llama port (-mqkv): see header for contract.
-bool llama_model_loader::create_merged_qkv(
-        const llama_hparams & hparams,
-        const buft_list_t *   buft_list_cpu,
-        const buft_list_t *   buft_list_layer,
-        int                   bid,
-        int64_t               n_embd_,
-        int64_t               q_ne,
-        int64_t               k_ne,
-        int64_t               v_ne,
-        ggml_tensor **        out_qkv,
-        ggml_tensor **        out_q,
-        ggml_tensor **        out_k,
-        ggml_tensor **        out_v) {
-    *out_qkv = nullptr;
-    *out_q = *out_k = *out_v = nullptr;
-
-    // Build canonical Q/K/V names for this layer.
-    char q_name[GGML_MAX_NAME], k_name[GGML_MAX_NAME], v_name[GGML_MAX_NAME];
-    snprintf(q_name, sizeof(q_name), "blk.%d.attn_q.weight", bid);
-    snprintf(k_name, sizeof(k_name), "blk.%d.attn_k.weight", bid);
-    snprintf(v_name, sizeof(v_name), "blk.%d.attn_v.weight", bid);
-
-    ggml_tensor * q_meta = get_tensor_meta(q_name);
-    ggml_tensor * k_meta = get_tensor_meta(k_name);
-    ggml_tensor * v_meta = get_tensor_meta(v_name);
-    if (!q_meta || !k_meta || !v_meta) {
-        return false;
+void llama_model_loader::done_getting_tensors(bool partial) const {
+    if (n_created > n_tensors) {
+        throw std::runtime_error(format("%s: too many tensors created; expected %d, got %d", __func__, n_tensors, n_created));
     }
-    if (q_meta->type != k_meta->type || q_meta->type != v_meta->type) {
-        return false;
-    }
-    if (q_meta->ne[0] != n_embd_ || k_meta->ne[0] != n_embd_ || v_meta->ne[0] != n_embd_) {
-        return false;
-    }
-    if (q_meta->ne[1] != q_ne || k_meta->ne[1] != k_ne || v_meta->ne[1] != v_ne) {
-        return false;
-    }
-
-    // Reject if any of Q/K/V is overridden to a buft that isn't the same as the others.
-    if (tensor_buft_overrides) {
-        ggml_backend_buffer_type_t override_buft[3] = {nullptr, nullptr, nullptr};
-        const char * names[3] = {q_name, k_name, v_name};
-        for (int i = 0; i < 3; ++i) {
-            for (const auto * o = tensor_buft_overrides; o->pattern != nullptr; ++o) {
-                std::regex pattern(o->pattern);
-                std::string n = names[i];
-                if (std::regex_search(n, pattern)) {
-                    override_buft[i] = o->buft;
-                    break;
-                }
-            }
+    if (n_created < n_tensors) {
+        if (!partial) {
+            throw std::runtime_error(format("%s: wrong number of tensors; expected %d, got %d", __func__, n_tensors, n_created));
         }
-        if (override_buft[0] != override_buft[1] || override_buft[0] != override_buft[2]) {
-            return false; // cannot merge across diverging override targets
-        }
-    }
-
-    // Pick buft using the same logic as create_tensor for a hypothetical merged QKV
-    // tensor (op = GGML_OP_MUL_MAT, layer-class buft list).
-    ggml_backend_buffer_type_t buft = nullptr;
-    if (tensor_buft_overrides) {
-        for (const auto * o = tensor_buft_overrides; o->pattern != nullptr; ++o) {
-            std::regex pattern(o->pattern);
-            std::string n = q_name;
-            if (std::regex_search(n, pattern)) {
-                if (o->buft == ggml_backend_cpu_buffer_type()) {
-                    buft = select_weight_buft(hparams, q_meta, GGML_OP_MUL_MAT, buft_list_cpu);
-                } else {
-                    buft = o->buft;
-                }
-                break;
-            }
-        }
-    }
-    if (!buft) {
-        buft = select_weight_buft(hparams, q_meta, GGML_OP_MUL_MAT, buft_list_layer);
-    }
-    if (!buft) {
-        return false;
-    }
-
-    // Avoid host buffer when mmap (mirror create_tensor).
-    auto * buft_dev = ggml_backend_buft_get_device(buft);
-    if (use_mmap && buft_dev && buft == ggml_backend_dev_host_buffer_type(buft_dev)) {
-        auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-        if (!cpu_dev) {
-            return false;
-        }
-        buft = ggml_backend_dev_buffer_type(cpu_dev);
-    }
-
-    // Acquire (or create) the ctx for this buft.
-    ggml_context * ctx = nullptr;
-    {
-        auto it = ctx_map.find(buft);
-        if (it == ctx_map.end()) {
-            int max_n_tensors = n_tensors;
-            max_n_tensors += 1;
-            max_n_tensors += hparams.n_layer * 2;
-            const size_t ctx_size = ggml_tensor_overhead() * max_n_tensors;
-            ggml_init_params p = {
-                /*.mem_size   =*/ ctx_size,
-                /*.mem_buffer =*/ nullptr,
-                /*.no_alloc   =*/ true,
-            };
-            ctx = ggml_init(p);
-            if (!ctx) {
-                return false;
-            }
-            ctx_map.emplace(buft, ctx);
-        } else {
-            ctx = it->second.get();
-        }
-    }
-
-    // Allocate the combined container in ctx.
-    const int64_t qkv_ne = q_ne + k_ne + v_ne;
-    ggml_tensor * qkv = ggml_new_tensor_2d(ctx, q_meta->type, n_embd_, qkv_ne);
-    char qkv_name[GGML_MAX_NAME];
-    snprintf(qkv_name, sizeof(qkv_name), "blk.%d.attn_qkv.weight", bid);
-    ggml_set_name(qkv, qkv_name);
-
-    // Register Q/K/V as views into qkv. Offsets follow row-major contiguous layout:
-    // Q occupies rows [0, q_ne), K rows [q_ne, q_ne+k_ne), V rows [q_ne+k_ne, qkv_ne).
-    const size_t row_bytes = qkv->nb[1];
-    ggml_tensor * q_view = create_tensor_as_view(ctx, qkv, q_name, { n_embd_, q_ne }, /*offset=*/0,                          /*required=*/true);
-    ggml_tensor * k_view = create_tensor_as_view(ctx, qkv, k_name, { n_embd_, k_ne }, /*offset=*/q_ne * row_bytes,            /*required=*/true);
-    ggml_tensor * v_view = create_tensor_as_view(ctx, qkv, v_name, { n_embd_, v_ne }, /*offset=*/(q_ne + k_ne) * row_bytes,   /*required=*/true);
-    if (!q_view || !k_view || !v_view) {
-        return false;
-    }
-
-    *out_qkv = qkv;
-    *out_q   = q_view;
-    *out_k   = k_view;
-    *out_v   = v_view;
-    return true;
-}
-
-void llama_model_loader::done_getting_tensors() const {
-    if (n_created != n_tensors) {
-        throw std::runtime_error(format("%s: wrong number of tensors; expected %d, got %d", __func__, n_tensors, n_created));
+        LLAMA_LOG_INFO("%s: partial load — used %d of %d tensors in the file (rest belong to a sibling model on the same .gguf)\n",
+                __func__, n_created, n_tensors);
     }
     if (n_tensors_moved > 0) {
         LLAMA_LOG_DEBUG("%s: tensor '%s' (%s) (and %zu others) cannot be used with preferred buffer type %s, using %s instead\n",
