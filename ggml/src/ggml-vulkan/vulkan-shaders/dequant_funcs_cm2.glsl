@@ -33,6 +33,19 @@ float16_t dequantFuncQ1_0(const in decodeBufQ1_0 bl, const in uint blockCoords[2
     return bit != 0u ? d : -d;
 }
 
+layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufQ2_0 {
+   block_q2_0 block;
+};
+
+float16_t dequantFuncQ2_0(const in decodeBufQ2_0 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
+{
+    const float16_t d = bl.block.d;
+    const uint idx = coordInBlock[1];
+    const uint byte_val = uint(bl.block.qs[idx >> 2]);
+    const uint shift = (idx & 3u) * 2u;
+    return float16_t(int((byte_val >> shift) & 3u) - 1) * d;
+}
+
 f16vec4 dequantFuncQ1_0_v(const in decodeBufQ1_0 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
 {
     const float16_t d  = bl.block.d;
@@ -1301,9 +1314,38 @@ f16vec4 dequantFuncNVFP4_v(const in decodeBufNVFP4 bl, const in uint blockCoords
 }
 #endif
 
+#if defined(DATA_A_TURBO3_0)
+layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufTURBO3_0 {
+   block_turbo3_0 block;
+};
+
+float16_t dequantFuncTURBO3_0(const in decodeBufTURBO3_0 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
+{
+    const float centroids[8] = float[8](
+        -0.190685, -0.117832, -0.065717, -0.021460,
+         0.021460,  0.065717,  0.117832,  0.190685
+    );
+    const float norm = float(bl.block.norm);
+    const uint j = coordInBlock[1];
+
+    // Extract 2-bit low index from qs (4 per byte)
+    const uint low2 = (uint(bl.block.qs[j / 4]) >> ((j % 4) * 2)) & 0x3;
+
+    // Extract 1-bit high from signs (8 per byte)
+    const uint hi1 = (uint(bl.block.signs[j / 8]) >> (j % 8)) & 0x1;
+
+    // Combine to 3-bit index
+    const uint idx = low2 | (hi1 << 2);
+
+    return float16_t(centroids[idx] * norm);
+}
+#endif
+
 #if defined(DATA_A_Q1_0)
 #define dequantFuncA dequantFuncQ1_0
 #define dequantFuncA_v dequantFuncQ1_0_v
+#elif defined(DATA_A_Q2_0)
+#define dequantFuncA dequantFuncQ2_0
 #elif defined(DATA_A_Q4_0)
 #define dequantFuncA dequantFuncQ4_0
 #define dequantFuncA_v dequantFuncQ4_0_v
@@ -1371,6 +1413,8 @@ f16vec4 dequantFuncNVFP4_v(const in decodeBufNVFP4 bl, const in uint blockCoords
 #elif defined(DATA_A_NVFP4)
 #define dequantFuncA dequantFuncNVFP4
 #define dequantFuncA_v dequantFuncNVFP4_v
+#elif defined(DATA_A_TURBO3_0)
+#define dequantFuncA dequantFuncTURBO3_0
 #elif defined(DATA_A_F32)
 #define dequantFuncA dequantFuncF32
 #endif
