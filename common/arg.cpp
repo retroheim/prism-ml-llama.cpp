@@ -397,6 +397,9 @@ const std::vector<ggml_type> kv_cache_types = {
     GGML_TYPE_IQ4_NL,
     GGML_TYPE_Q5_0,
     GGML_TYPE_Q5_1,
+    GGML_TYPE_TURBO2_0, // ik_llama port: TurboQuant 2-bit rotated KV
+    GGML_TYPE_TURBO3_0, // ik_llama port: TurboQuant 3-bit rotated KV
+    GGML_TYPE_TURBO4_0, // ik_llama port: TurboQuant 4-bit rotated KV
 };
 
 static ggml_type kv_cache_type_from_str(const std::string & s) {

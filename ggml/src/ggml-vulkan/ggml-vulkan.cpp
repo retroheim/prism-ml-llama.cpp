@@ -16531,6 +16531,11 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_Q4_0:
                         return true;
                     case GGML_TYPE_Q1_0:
+                    case GGML_TYPE_TURBO2_0:
+                    case GGML_TYPE_TURBO3_0:
+                    case GGML_TYPE_TURBO4_0:
+                        // ik_llama port: turbo KV cache types — coopmat2 FA only
+                        // (flash_attn_cm2 decodes them via dequantFuncTURBO*).
                         return coopmat2;
                     default:
                         return false;
