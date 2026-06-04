@@ -1204,12 +1204,21 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     const int n_layer      = hparams.n_layer;
     const int n_gpu_layers = this->n_gpu_layers();
 
-    const bool use_mmap_buffer = true;
+    // ik_llama port (-mqkv): the runtime QKV merge synthesises a container tensor and
+    // exposes Q/K/V as views. The mmap fast path (buffer-from-host-ptr) calls
+    // ggml_backend_tensor_alloc directly on each gguf tensor, which asserts view_src==NULL.
+    // Disable the mmap buffer path when -mqkv is active so the loader takes the regular
+    // set_tensor path (which handles view writes correctly through the parent buffer).
+    const bool use_mmap_buffer = !params.merge_qkv;
 
     this->ml = &ml; // to be used by create_tensor() and load_arch_tensors()
 
     LLAMA_LOG_INFO("%s: loading model tensors, this can take a while... (mmap = %s, direct_io = %s)\n",
         __func__, ml.use_mmap ? "true" : "false", ml.use_direct_io ? "true" : "false");
+
+    if (params.merge_qkv) {
+        LLAMA_LOG_INFO("%s: -mqkv: will attempt to merge Q,K,V into wqkv when types match (mmap disabled)\n", __func__);
+    }
 
     // build a list of buffer types for the CPU and GPU devices
     pimpl->cpu_buft_list = make_cpu_buft_list(devices, params.use_extra_bufts, params.no_host);
@@ -2651,6 +2660,27 @@ void llama_model_base::create_tensor_qkv(llama_layer & layer, int bid,
     if (layer.wqkv) {
         layer.wqkv_b = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "bias", bid), {n_embd_qkv}, TENSOR_NOT_REQUIRED | TENSOR_SKIP_IF_VIRTUAL);
     } else {
+        // ik_llama port (-mqkv): when enabled and Q/K/V are stored separately in the
+        // gguf, synthesise a contiguous wqkv container and expose Q/K/V as views into
+        // it (centralised create_tensor_qkv covers the LLaMA/Granite/Mistral/Qwen2/3
+        // family and any arch routed through this helper). Falls through to separate
+        // creation on any mismatch. Biases still load separately.
+        if (params.merge_qkv && bid >= 0 && ml != nullptr) {
+            const buft_list_t * buft_list_layer = pimpl->dev_layer.at(bid).buft_list;
+            ggml_tensor * qkv = nullptr, * q_v = nullptr, * k_v = nullptr, * v_v = nullptr;
+            if (ml->create_merged_qkv(hparams, &pimpl->cpu_buft_list, buft_list_layer, bid,
+                                      n_embd_, n_embd_q_, n_embd_k_, n_embd_v_,
+                                      &qkv, &q_v, &k_v, &v_v)) {
+                layer.wqkv = qkv;
+                layer.wq   = q_v;
+                layer.wk   = k_v;
+                layer.wv   = v_v;
+                layer.wq_b = create_tensor(tn(LLM_TENSOR_ATTN_Q, "bias", bid), {n_embd_q_}, TENSOR_NOT_REQUIRED);
+                layer.wk_b = create_tensor(tn(LLM_TENSOR_ATTN_K, "bias", bid), {n_embd_k_}, TENSOR_NOT_REQUIRED);
+                layer.wv_b = create_tensor(tn(LLM_TENSOR_ATTN_V, "bias", bid), {n_embd_v_}, TENSOR_NOT_REQUIRED);
+                return;
+            }
+        }
         layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight", bid), {n_embd_, n_embd_q_}, flags);
         layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K, "weight", bid), {n_embd_, n_embd_k_}, flags);
         layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V, "weight", bid), {n_embd_, n_embd_v_}, flags);

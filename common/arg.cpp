@@ -2034,6 +2034,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_KV_OFFLOAD"));
     add_opt(common_arg(
+        {"-mqkv", "--merge-qkv"},
+        "merge Q,K,V projections into a single contiguous tensor at load time (ik_llama port)\n"
+        "GPU-side perf gain via fewer mat_mul calls; requires same dtype on Q/K/V",
+        [](common_params & params) {
+            params.merge_qkv = true;
+        }
+    ).set_env("LLAMA_ARG_MERGE_QKV"));
+    add_opt(common_arg(
         {"--repack"},
         {"-nr", "--no-repack"},
         string_format("whether to enable weight repacking (default: %s)", params.no_extra_bufts ? "disabled" : "enabled"),
